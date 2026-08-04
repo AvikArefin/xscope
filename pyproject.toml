@@ -1,0 +1,32 @@
+[project]
+name = "xscope"
+version = "0.1.1"
+description = "A local, zero-config ML experiment visualization dashboard"
+readme = "README.md"
+authors = [
+    { name = "Avik Arefin", email = "avik.me.arefin@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "nicegui>=3.15.0",
+]
+license = {text = "Apache-2.0"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+
+[project.urls]
+Repository = "https://github.com/avik-arefin/xscope"
+
+[project.scripts]
+xscope = "xscope.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
