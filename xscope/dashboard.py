@@ -73,8 +73,20 @@ def build_grouped_scalar_chart_options(selected_runs: list[dict], x_key: str = "
                             }
                         }
                     },
-                    'xAxis': {'type': 'value', 'name': x_key, 'nameLocation': 'middle'},
-                    'yAxis': {'type': 'value', 'name': chart_title, 'nameLocation': 'middle'},
+                    'xAxis': {
+                        'type': 'value',
+                        'name': x_key,
+                        'nameLocation': 'middle',
+                        'nameTextStyle': {'color': '#000000'},
+                        'axisLabel': {'color': '#000000'},
+                    },
+                    'yAxis': {
+                        'type': 'value',
+                        'name': chart_title,
+                        'nameLocation': 'middle',
+                        'nameTextStyle': {'color': '#000000'},
+                        'axisLabel': {'color': '#000000'},
+                    },
                     'series': [],
                 }
 
