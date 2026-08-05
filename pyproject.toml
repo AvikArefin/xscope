@@ -1,6 +1,6 @@
 [project]
 name = "xscope"
-version = "0.1.1"
+version = "0.2.0"
 description = "A local, zero-config ML experiment visualization dashboard"
 readme = "README.md"
 authors = [
