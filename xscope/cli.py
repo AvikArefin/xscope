@@ -16,8 +16,13 @@ def main():
         default=8080,
         help="Port to run dashboard server on (default: 8080)",
     )
+    parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="Enable auto-reloading on file changes",
+    )
     args = parser.parse_args()
-    run_dashboard(metrics_dir=args.dir, port=args.port, reload=False)
+    run_dashboard(metrics_dir=args.dir, port=args.port, reload=args.reload)
 
 if __name__ in {"__main__", "__mp_main__"}:
     main()
