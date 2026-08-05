@@ -113,10 +113,12 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
             ui.button(on_click=lambda: right_drawer.toggle(), icon='settings').props('flat color=white')
 
         # Main dynamic container for metric charts
-        charts_container = ui.column().classes('w-full p-4 gap-6')
+        charts_container = ui.element('div').classes('w-full p-4 grid gap-6 grid-cols-1')
 
         def update_chart():
             charts_container.clear()
+            cols = columns_select.value
+            charts_container.classes(replace=f'w-full p-4 grid gap-6 grid-cols-1 md:grid-cols-{cols}')
             with charts_container:
                 for options in build_grouped_scalar_chart_options(selected_runs, font_family=font_select.value):
                     ui.echart(options, renderer='svg').classes('w-full h-[400px]')
@@ -186,6 +188,13 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
 
 
         with ui.right_drawer(top_corner=True, bottom_corner=True).style('background-color: #edf2f7').classes('p-3 gap-3') as right_drawer:
+            columns_select = ui.select(
+                options={1: 'Single Column', 2: 'Double Column', 3: 'Triple Column'},
+                value=1,
+                label='Grid Layout',
+                on_change=lambda: update_chart(),
+            ).classes('w-full')
+
             font_select = ui.select(
                 options=['sans-serif', 'Times New Roman', 'Arial', 'Courier New'],
                 value='sans-serif',
