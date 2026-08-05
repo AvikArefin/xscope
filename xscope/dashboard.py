@@ -36,7 +36,7 @@ def load_records(run_path: str) -> list[dict]:
     return records
 
 
-def build_grouped_scalar_chart_options(selected_runs: list[dict], x_key: str = "epoch") -> list[dict]:
+def build_grouped_scalar_chart_options(selected_runs: list[dict], x_key: str = "epoch", font_family: str = "sans-serif") -> list[dict]:
     """Formats time-series scalar metrics (metrics.jsonl) into ECharts line plots grouped by metric prefix."""
     if not selected_runs:
         return []
@@ -60,9 +60,19 @@ def build_grouped_scalar_chart_options(selected_runs: list[dict], x_key: str = "
             chart_title = key.split('/')[0] if '/' in key else key
             if chart_title not in charts.keys():
                 charts[chart_title] = {
+                    'textStyle': {'fontFamily': font_family},
                     'title': {'text': chart_title.upper()},
                     'tooltip': {'trigger': 'axis'},
                     'legend': {'top': '8%'},
+                    'toolbox': {
+                        'feature': {
+                            'saveAsImage': {
+                                'title': 'Save SVG',
+                                'type': 'svg',
+                                'backgroundColor': '#ffffff',
+                            }
+                        }
+                    },
                     'xAxis': {'type': 'value', 'name': x_key, 'nameLocation': 'middle'},
                     'yAxis': {'type': 'value', 'name': chart_title, 'nameLocation': 'middle'},
                     'series': [],
@@ -90,7 +100,7 @@ def build_grouped_scalar_chart_options(selected_runs: list[dict], x_key: str = "
 def create_dashboard_page(metrics_dir: str = "metrics"):
     """Registers NiceGUI root page layout for metric visualization."""
 
-    @ui.page('/', title='xscope', favicon='data:image/x-icon;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=')
+    @ui.page('/')
     def layout():
         all_runs = load_runs_metadata(metrics_dir)
         selected_runs: list[dict] = []
@@ -99,6 +109,8 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
         with ui.header(elevated=True).style('background-color: #3874c8').classes('items-center justify-left'):
             ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')
             ui.label('XSCOPE')
+            ui.space()
+            ui.button(on_click=lambda: right_drawer.toggle(), icon='settings').props('flat color=white')
 
         # Main dynamic container for metric charts
         charts_container = ui.column().classes('w-full p-4 gap-6')
@@ -106,8 +118,8 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
         def update_chart():
             charts_container.clear()
             with charts_container:
-                for options in build_grouped_scalar_chart_options(selected_runs):
-                    ui.echart(options).classes('w-full h-[400px]')
+                for options in build_grouped_scalar_chart_options(selected_runs, font_family=font_select.value):
+                    ui.echart(options, renderer='svg').classes('w-full h-[400px]')
 
         checkboxes: dict[str, ui.checkbox] = {}
 
@@ -171,6 +183,16 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
 
                     with ui.element('div').classes('w-full bg-slate-200 text-slate-800 px-2 py-1.5 font-mono text-xs mt-1'):
                         ui.label(note_text)
+
+
+        with ui.right_drawer(top_corner=True, bottom_corner=True).style('background-color: #edf2f7').classes('p-3 gap-3') as right_drawer:
+            font_select = ui.select(
+                options=['sans-serif', 'Times New Roman', 'Arial', 'Courier New'],
+                value='sans-serif',
+                label='Font Family',
+                on_change=lambda: update_chart(),
+            ).classes('w-full')
+
 
         with ui.page_scroller(position='bottom-right', x_offset=20, y_offset=20):
             ui.button('Scroll to Top')
