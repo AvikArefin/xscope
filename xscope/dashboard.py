@@ -46,12 +46,12 @@ def load_runs_metadata(dir: str = "metrics") -> list[dict]:
     return runs
 
 
-def load_records(run_path: str) -> list[dict]:
+def load_records(run_path: str, filename: str) -> list[dict]:
     """Loads metric records from metrics.jsonl inside an experiment folder."""
-    metrics_path = os.path.join(run_path, "metrics.jsonl")
+    path = os.path.join(run_path, filename)
     records: list[dict] = []
-    if os.path.isfile(metrics_path):
-        with open(metrics_path, "r", encoding="utf-8") as f:
+    if os.path.isfile(path):
+        with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -74,6 +74,39 @@ def save_run_note(target_run: dict, new_note: str):
 def get_run_color(run_index: int) -> str:
     return RUN_PALETTE[run_index % len(RUN_PALETTE)]
 
+def get_chart_base_config(font_family: str, chart_title: str, x_key = None, y_key = None, scale: bool = False):
+    return {
+        'textStyle': {'fontFamily': font_family},
+        'title': {'text': chart_title.upper()},
+        'tooltip': {'trigger': 'axis'},
+        'legend': {'top': '8%'},
+        'toolbox': {
+            'feature': {
+                'saveAsImage': {
+                    'title': 'Save SVG',
+                    'type': 'svg',
+                    'backgroundColor': '#ffffff',
+                }
+            }
+        },
+        'xAxis': {
+            'type': 'value',
+            'name': x_key,
+            'scale': scale,
+            'nameLocation': 'middle',
+            'nameTextStyle': {'color': '#000000'},
+            'axisLabel': {'color': '#000000'},
+        },
+        'yAxis': {
+            'type': 'value',
+            'name': y_key,
+            'scale': scale,
+            'nameLocation': 'middle',
+            'nameTextStyle': {'color': '#000000'},
+            'axisLabel': {'color': '#000000'},
+        },
+        'series': [],
+    }
 
 def get_line_style(base_color: str, line_idx: int, num_lines: int) -> tuple[str, str]:
     """Returns (line_type, series_color) for a line in a chart based on index and total lines."""
@@ -92,7 +125,8 @@ def get_line_style(base_color: str, line_idx: int, num_lines: int) -> tuple[str,
     series_color = f"#{round(r_new * 255):02x}{round(g_new * 255):02x}{round(b_new * 255):02x}"
     return line_type, series_color
 
-def build_grouped_scalar_chart_options(selected_runs: list[dict], all_runs: list[dict], x_key: str = "epoch", font_family: str = "sans-serif") -> list[dict]:
+
+def build_grouped_scalar_chart_options(selected_runs: list[dict], x_key: str = "epoch", font_family: str = "sans-serif") -> list[dict]:
     """Formats time-series scalar metrics (metrics.jsonl) into ECharts line plots grouped by metric prefix."""
     if not selected_runs:
         return []
@@ -101,7 +135,7 @@ def build_grouped_scalar_chart_options(selected_runs: list[dict], all_runs: list
     charts: dict[str, dict] = {}
 
     for run in selected_runs:
-        records = load_records(run['run_path'])
+        records = load_records(run['run_path'], "metrics.jsonl")
         if not records:
             continue
 
@@ -122,36 +156,7 @@ def build_grouped_scalar_chart_options(selected_runs: list[dict], all_runs: list
             num_lines = len(keys_in_chart)
 
             if chart_title not in charts:
-                charts[chart_title] = {
-                    'textStyle': {'fontFamily': font_family},
-                    'title': {'text': chart_title.upper()},
-                    'tooltip': {'trigger': 'axis'},
-                    'legend': {'top': '8%'},
-                    'toolbox': {
-                        'feature': {
-                            'saveAsImage': {
-                                'title': 'Save SVG',
-                                'type': 'svg',
-                                'backgroundColor': '#ffffff',
-                            }
-                        }
-                    },
-                    'xAxis': {
-                        'type': 'value',
-                        'name': x_key,
-                        'nameLocation': 'middle',
-                        'nameTextStyle': {'color': '#000000'},
-                        'axisLabel': {'color': '#000000'},
-                    },
-                    'yAxis': {
-                        'type': 'value',
-                        'name': chart_title,
-                        'nameLocation': 'middle',
-                        'nameTextStyle': {'color': '#000000'},
-                        'axisLabel': {'color': '#000000'},
-                    },
-                    'series': [],
-                }
+                charts[chart_title] = get_chart_base_config(font_family, chart_title, x_key, chart_title, False)
 
             for line_idx, key in enumerate(keys_in_chart):
                 series_name = f"{run_label}: {key}" if is_multi_run else key
@@ -181,25 +186,9 @@ def build_grouped_scalar_chart_options(selected_runs: list[dict], all_runs: list
 
     return list(charts.values())
 
-def load_2d_records(run_path: str) -> list[dict]:
-    """Loads 2D spatial records from 2d.jsonl inside an experiment folder."""
-    path = os.path.join(run_path, "2d.jsonl")
-    records: list[dict] = []
-    if os.path.isfile(path):
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        records.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-    return records
-
 
 def build_2d_chart_options(
-    selected_runs: list[dict], 
-    all_runs: list[dict], 
+    selected_runs: list[dict],  
     font_family: str = "sans-serif",
     equal_aspect: bool = True,
 ) -> list[dict]:
@@ -211,7 +200,7 @@ def build_2d_chart_options(
     charts: dict[str, dict] = {}
 
     for run in selected_runs:
-        records = load_2d_records(run['run_path'])
+        records = load_records(run['run_path'], "2d.jsonl")
         if not records:
             continue
 
@@ -233,34 +222,7 @@ def build_2d_chart_options(
             num_lines = len(keys_in_chart)
 
             if chart_title not in charts:
-                charts[chart_title] = {
-                    'textStyle': {'fontFamily': font_family},
-                    'title': {'text': f"2D: {chart_title.upper()}"},
-                    'tooltip': {'trigger': 'item'},
-                    'legend': {'top': '8%'},
-                    'toolbox': {
-                        'feature': {
-                            'saveAsImage': {
-                                'title': 'Save SVG',
-                                'type': 'svg',
-                                'backgroundColor': '#ffffff',
-                            }
-                        }
-                    },
-                    'xAxis': {
-                        'type': 'value',
-                        'scale': True,
-                        'nameTextStyle': {'color': '#000000'},
-                        'axisLabel': {'color': '#000000'},
-                    },
-                    'yAxis': {
-                        'type': 'value',
-                        'scale': True,
-                        'nameTextStyle': {'color': '#000000'},
-                        'axisLabel': {'color': '#000000'},
-                    },
-                    'series': [],
-                }
+                charts[chart_title] = get_chart_base_config(font_family, chart_title, None, None, True)
 
             for line_idx, key in enumerate(keys_in_chart):
                 clean_name = key.split('/', 1)[1] if '/' in key else key
@@ -360,9 +322,9 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
             cols = columns_select.value
             charts_container.classes(replace=f'w-full p-4 grid gap-6 grid-cols-1 md:grid-cols-{cols}')
             with charts_container:
-                for options in build_grouped_scalar_chart_options(selected_runs, all_runs=all_runs, font_family=font_select.value):
+                for options in build_grouped_scalar_chart_options(selected_runs, font_family=font_select.value):
                     ui.echart(options, renderer='svg').classes('w-full h-[400px]')
-                for options in build_2d_chart_options(selected_runs, all_runs=all_runs, font_family=font_select.value, equal_aspect=aspect_2d_checkbox.value):
+                for options in build_2d_chart_options(selected_runs, font_family=font_select.value, equal_aspect=aspect_2d_checkbox.value):
                     ui.echart(options, renderer='svg').classes('w-full h-[400px]')
 
         def select_all():
