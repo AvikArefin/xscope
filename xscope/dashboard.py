@@ -32,6 +32,14 @@ def load_runs_metadata(dir: str = "metrics") -> list[dict]:
             with open(meta_path) as f:
                 meta = json.load(f)
             meta['run_path'] = folder_path
+
+            note_path = os.path.join(folder_path, "note.txt")
+            if os.path.isfile(note_path):
+                with open(note_path, "r", encoding="utf-8") as f:
+                    meta['note'] = f.read()
+            else:
+                meta['note'] = ""
+
             runs.append(meta)
     for i, run in enumerate(runs): 
         run['color'] = get_run_color(i)
@@ -52,6 +60,16 @@ def load_records(run_path: str) -> list[dict]:
                     except json.JSONDecodeError:
                         continue
     return records
+
+def save_run_note(target_run: dict, new_note: str):
+    target_run['note'] = new_note
+    note_path = os.path.join(target_run['run_path'], 'note.txt')
+    try:
+        with open(note_path, 'w', encoding='utf-8') as f:
+            f.write(new_note)
+    except Exception as err:
+        print(f"[XSCOPE] Error saving note to {note_path}: {err}")
+
 
 def get_run_color(run_index: int) -> str:
     return RUN_PALETTE[run_index % len(RUN_PALETTE)]
@@ -172,12 +190,26 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
         all_runs = load_runs_metadata(metrics_dir)
         selected_map: dict[str, bool] = {r['run_path']: False for r in all_runs}
 
+        ui.add_head_html('''
+            <style>
+                .compact-input .q-field__control {
+                    height: 28px !important;
+                    min-height: 28px !important;
+                }
+                .compact-input .q-field__native {
+                    padding-top: 0 !important;
+                    padding-bottom: 0 !important;
+                    font-size: 13px;
+                }
+            </style>
+        ''')
+
         # Title Bar
-        with ui.header(elevated=True).style('background-color: #3874c8').classes('items-center justify-left'):
-            ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')
-            ui.label('XSCOPE')
+        with ui.header(elevated=False).classes('bg-white text-slate-800 border-b border-slate-200 items-center justify-left h-12 px-4 py-0'):
+            ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat dense color=slate-700')
+            ui.label('XSCOPE').classes('font-bold text-sm font-mono tracking-wider text-slate-900')
             ui.space()
-            ui.button(on_click=lambda: right_drawer.toggle(), icon='settings').props('flat color=white')
+            ui.button(on_click=lambda: right_drawer.toggle(), icon='settings').props('flat dense color=slate-700')
 
         # Main dynamic container for metric charts
         charts_container = ui.element('div').classes('w-full p-4 grid gap-6 grid-cols-1')
@@ -203,9 +235,9 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
 
         # Left Pane
         with ui.left_drawer(top_corner=True, bottom_corner=True).style('background-color: #edf2f7').classes('p-3 gap-3') as left_drawer:
-            with ui.row():
-                ui.button('Select All', on_click=select_all)
-                ui.button('Clear All', on_click=clear_all)
+            with ui.row().classes('w-full gap-2'):
+                ui.button('Select All', icon='select_all', on_click=select_all).props('unelevated square no-caps color=white text-color=slate-800').classes('flex-1')
+                ui.button('Clear All', icon='clear_all', on_click=clear_all).props('unelevated square no-caps color=white text-color=slate-800').classes('flex-1')
 
             for run_idx, run in enumerate(all_runs):
                 exp_name = run.get('experiment_name', '')
@@ -220,8 +252,6 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                 commit = run.get('git_commit', 'unknown')
                 sub_text = f"{ts_fmt} • {commit}" if ts_fmt else str(commit)
 
-                note_text = run.get('note') or 'Add a note...'
-
                 with ui.card().classes('w-full p-3 shadow-sm gap-1'):
                     with ui.row().classes('items-center gap-2 no-wrap w-full'):
                         ui.checkbox(
@@ -232,17 +262,20 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
 
                     ui.label(sub_text).classes('font-mono text-xs text-slate-800 font-medium leading-none')
 
-                    with ui.element('div').classes('w-full bg-slate-200 text-slate-800 px-2 py-1.5 font-mono text-xs mt-1'):
-                        ui.label(note_text)
+                    ui.input(
+                        value=run.get('note', ''), 
+                        placeholder='Add a note...', 
+                        on_change=lambda e, r=run: save_run_note(r, e.value)
+                    ).props('filled dense square').classes('w-full compact-input')
 
 
         with ui.right_drawer(top_corner=True, bottom_corner=True).style('background-color: #edf2f7').classes('p-3 gap-3') as right_drawer:
-            columns_select = ui.select(
-                options={1: 'Single Column', 2: 'Double Column', 3: 'Triple Column'},
+            ui.label('Grid Layout').classes('text-xs text-slate-600')
+            columns_select = ui.toggle(
+                options={1: '1 Col', 2: '2 Col', 3: '3 Col'},
                 value=1,
-                label='Grid Layout',
                 on_change=lambda: update_chart(),
-            ).classes('w-full')
+            ).props('spread no-caps toggle-color=dark toggle-text-color=white color=white text-color=slate-800 unelevated square').classes('w-full')
 
             font_select = ui.select(
                 options=['sans-serif', 'Times New Roman', 'Arial', 'Courier New'],
