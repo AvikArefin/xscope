@@ -29,5 +29,5 @@ xscope
 
 You can use 
 ```bash
-uv run src/cli.py —reload
+uv run src/cli.py -—reload
 ```
