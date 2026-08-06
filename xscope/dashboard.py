@@ -285,6 +285,112 @@ def build_2d_chart_options(
     return list(charts.values())
 
 
+def build_matrix_chart_options(
+    selected_runs: list[dict],
+    font_family: str = "sans-serif",
+) -> list[dict]:
+    """Formats matrix records (matrix.jsonl) into ECharts Heatmap plots."""
+    if not selected_runs:
+        return []
+
+    is_multi_run = len(selected_runs) > 1
+    charts: list[dict] = []
+
+    for run in selected_runs:
+        records = load_records(run['run_path'], "matrix.jsonl")
+        if not records:
+            continue
+
+        exp_name = run.get('experiment_name', '')
+        exp_num = run.get('experiment_number', '')
+        run_label = f"{exp_name} #{exp_num}" if exp_num != "" else str(exp_name)
+
+        latest_record = records[-1]
+        step = latest_record.get('step')
+        labels = latest_record.get('labels', [])
+        matrix = latest_record.get('matrix', [])
+
+        if not matrix:
+            continue
+
+        num_rows = len(matrix)
+        num_cols = len(matrix[0]) if num_rows > 0 else 0
+
+        if not labels:
+            labels = [f"Class {i}" for i in range(max(num_rows, num_cols))]
+
+        heatmap_data = []
+        max_val = 0
+        for i in range(num_rows):
+            for j in range(len(matrix[i])):
+                val = matrix[i][j]
+                heatmap_data.append([j, i, val])
+                if val > max_val:
+                    max_val = val
+
+        title_suffix = f" @ STEP {step}" if step is not None else ""
+        chart_title = f"{run_label}: MATRIX{title_suffix}" if is_multi_run else f"MATRIX{title_suffix}"
+
+        chart_config = {
+            'textStyle': {'fontFamily': font_family},
+            'title': {'text': chart_title.upper()},
+            'tooltip': {'position': 'top'},
+            'toolbox': {
+                'feature': {
+                    'saveAsImage': {
+                        'title': 'Save SVG',
+                        'type': 'svg',
+                        'backgroundColor': '#ffffff',
+                    }
+                }
+            },
+            'grid': {'height': '65%', 'top': '15%'},
+            'xAxis': {
+                'type': 'category',
+                'data': labels,
+                'name': 'Predicted',
+                'nameLocation': 'middle',
+                'nameGap': 25,
+                'splitArea': {'show': True},
+            },
+            'yAxis': {
+                'type': 'category',
+                'data': labels,
+                'name': 'True',
+                'nameLocation': 'middle',
+                'nameGap': 35,
+                'splitArea': {'show': True},
+                'inverse': True,
+            },
+            'visualMap': {
+                'min': 0,
+                'max': max_val if max_val > 0 else 1,
+                'calculable': True,
+                'orient': 'horizontal',
+                'left': 'center',
+                'bottom': '0%',
+                'inRange': {
+                    'color': ['#f8fafc', '#93c5fd', '#1d4ed8']
+                }
+            },
+            'series': [{
+                'name': 'Count',
+                'type': 'heatmap',
+                'data': heatmap_data,
+                'label': {'show': True},
+                'emphasis': {
+                    'itemStyle': {
+                        'shadowBlur': 10,
+                        'shadowColor': 'rgba(0, 0, 0, 0.5)'
+                    }
+                }
+            }]
+        }
+        charts.append(chart_config)
+
+    return charts
+
+
 def create_dashboard_page(metrics_dir: str = "metrics"):
     """Registers NiceGUI root page layout for metric visualization."""
 
@@ -332,6 +438,9 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                     draw_type=style_2d_toggle.value,
                 ):
                     ui.echart(options, renderer='svg').classes('w-full h-[400px]')
+                for options in build_matrix_chart_options(selected_runs, font_family=font_select.value):
+                    ui.echart(options, renderer='svg').classes('w-full h-[400px]')
+
 
         def select_all():
             for path in selected_map:
