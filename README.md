@@ -2,6 +2,10 @@
 
 `xscope` is a local, zero-config ML experiment visualization dashboard. It is designed to be used alongside the **`mtrick`** logging library and runs as a standalone tool to monitor and visualize your metrics.
 
+https://pypi.org/project/mtrick/ 
+
+![Dashboard Interface](https://raw.githubusercontent.com/AvikArefin/xscope/main/interface.png)
+
 ## Installation
 
 You can install `xscope` as a global command-line tool using `uv` or `pipx`:
