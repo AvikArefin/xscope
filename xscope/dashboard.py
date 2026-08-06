@@ -3,6 +3,7 @@ import json
 import colorsys
 
 from nicegui import app, ui
+from xscope.data_manager import RunDataManager
 
 RUN_PALETTE = [
     '#2563eb',  # Blue
@@ -46,8 +47,11 @@ def load_runs_metadata(dir: str = "metrics") -> list[dict]:
     return runs
 
 
-def load_records(run_path: str, filename: str) -> list[dict]:
+def load_records(run_path: str, filename: str, data_manager: RunDataManager | None = None) -> list[dict]:
     """Loads metric records from metrics.jsonl inside an experiment folder."""
+    if data_manager is not None:
+        _, records = data_manager.get_records(run_path, filename)
+        return records
     path = os.path.join(run_path, filename)
     records: list[dict] = []
     if os.path.isfile(path):
@@ -126,7 +130,12 @@ def get_line_style(base_color: str, line_idx: int, num_lines: int) -> tuple[str,
     return line_type, series_color
 
 
-def build_grouped_scalar_chart_options(selected_runs: list[dict], x_key: str = "epoch", font_family: str = "sans-serif") -> list[dict]:
+def build_grouped_scalar_chart_options(
+    selected_runs: list[dict],
+    x_key: str = "epoch",
+    font_family: str = "sans-serif",
+    data_manager: RunDataManager | None = None,
+) -> list[dict]:
     """Formats time-series scalar metrics (metrics.jsonl) into ECharts line plots grouped by metric prefix."""
     if not selected_runs:
         return []
@@ -135,7 +144,7 @@ def build_grouped_scalar_chart_options(selected_runs: list[dict], x_key: str = "
     charts: dict[str, dict] = {}
 
     for run in selected_runs:
-        records = load_records(run['run_path'], "metrics.jsonl")
+        records = load_records(run['run_path'], "metrics.jsonl", data_manager=data_manager)
         if not records:
             continue
 
@@ -192,6 +201,7 @@ def build_2d_chart_options(
     font_family: str = "sans-serif",
     equal_aspect: bool = True,
     draw_type: str = "dots",
+    data_manager: RunDataManager | None = None,
 ) -> list[dict]:
     """Formats 2D spatial points/lines (2d.jsonl) into ECharts plots grouped by key prefix."""
     if not selected_runs:
@@ -201,7 +211,7 @@ def build_2d_chart_options(
     charts: dict[str, dict] = {}
 
     for run in selected_runs:
-        records = load_records(run['run_path'], "2d.jsonl")
+        records = load_records(run['run_path'], "2d.jsonl", data_manager=data_manager)
         if not records:
             continue
 
@@ -288,6 +298,7 @@ def build_2d_chart_options(
 def build_matrix_chart_options(
     selected_runs: list[dict],
     font_family: str = "sans-serif",
+    data_manager: RunDataManager | None = None,
 ) -> list[dict]:
     """Formats matrix records (matrix.jsonl) into ECharts Heatmap plots."""
     if not selected_runs:
@@ -297,7 +308,8 @@ def build_matrix_chart_options(
     charts: list[dict] = []
 
     for run in selected_runs:
-        records = load_records(run['run_path'], "matrix.jsonl")
+        records = load_records(run['run_path'], "matrix.jsonl", data_manager=data_manager)
+
         if not records:
             continue
 
@@ -396,8 +408,13 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
 
     @ui.page('/')
     def layout():
-        all_runs = load_runs_metadata(metrics_dir)
+        data_manager = RunDataManager(metrics_dir)
+        all_runs = data_manager.load_runs_metadata()
+        for i, run in enumerate(all_runs):
+            run['color'] = get_run_color(i)
+
         selected_map: dict[str, bool] = {r['run_path']: False for r in all_runs}
+        active_echarts: dict[str, ui.echart] = {}
 
         ui.add_head_html('''
             <style>
@@ -423,34 +440,72 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
         # Main dynamic container for metric charts
         charts_container = ui.element('div').classes('w-full p-4 grid gap-6 grid-cols-1')
 
-        def update_chart():
+        def render_all_charts():
             selected_runs = [r for r in all_runs if selected_map.get(r['run_path'])]
             charts_container.clear()
+            active_echarts.clear()
+
             cols = columns_select.value
             charts_container.classes(replace=f'w-full p-4 grid gap-6 grid-cols-1 md:grid-cols-{cols}')
             with charts_container:
-                for options in build_grouped_scalar_chart_options(selected_runs, font_family=font_select.value):
-                    ui.echart(options, renderer='svg').classes('w-full h-[400px]')
-                for options in build_2d_chart_options(
+                all_opts = []
+                all_opts.extend(build_grouped_scalar_chart_options(selected_runs, font_family=font_select.value, data_manager=data_manager))
+                all_opts.extend(build_2d_chart_options(
                     selected_runs,
                     font_family=font_select.value,
                     equal_aspect=aspect_2d_toggle.value,
                     draw_type=style_2d_toggle.value,
-                ):
-                    ui.echart(options, renderer='svg').classes('w-full h-[400px]')
-                for options in build_matrix_chart_options(selected_runs, font_family=font_select.value):
-                    ui.echart(options, renderer='svg').classes('w-full h-[400px]')
+                    data_manager=data_manager,
+                ))
+                all_opts.extend(build_matrix_chart_options(selected_runs, font_family=font_select.value, data_manager=data_manager))
 
+                for options in all_opts:
+                    chart_title = options.get('title', {}).get('text', '')
+                    widget = ui.echart(options, renderer='svg').classes('w-full h-[400px]')
+                    if chart_title:
+                        active_echarts[chart_title] = widget
+
+        def update_charts_incremental():
+            selected_runs = [r for r in all_runs if selected_map.get(r['run_path'])]
+            if not selected_runs:
+                return
+
+            all_opts = []
+            all_opts.extend(build_grouped_scalar_chart_options(selected_runs, font_family=font_select.value, data_manager=data_manager))
+            all_opts.extend(build_2d_chart_options(
+                selected_runs,
+                font_family=font_select.value,
+                equal_aspect=aspect_2d_toggle.value,
+                draw_type=style_2d_toggle.value,
+                data_manager=data_manager,
+            ))
+            all_opts.extend(build_matrix_chart_options(selected_runs, font_family=font_select.value, data_manager=data_manager))
+
+            current_titles = {opt.get('title', {}).get('text', '') for opt in all_opts if opt.get('title', {}).get('text')}
+            if current_titles != set(active_echarts.keys()):
+                render_all_charts()
+                return
+
+            for options in all_opts:
+                title = options.get('title', {}).get('text', '')
+                if title in active_echarts:
+                    widget = active_echarts[title]
+                    widget.options['series'] = options['series']
+                    if 'xAxis' in options and 'min' in options['xAxis']:
+                        widget.options['xAxis'] = options['xAxis']
+                    if 'yAxis' in options and 'min' in options['yAxis']:
+                        widget.options['yAxis'] = options['yAxis']
+                    widget.update()
 
         def select_all():
             for path in selected_map:
                 selected_map[path] = True
-            update_chart()
+            render_all_charts()
 
         def clear_all():
             for path in selected_map:
                 selected_map[path] = False
-            update_chart()
+            render_all_charts()
 
         # Left Pane
         with ui.left_drawer(top_corner=True, bottom_corner=True).style('background-color: #edf2f7').classes('p-3 gap-3') as left_drawer:
@@ -474,7 +529,7 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                 with ui.card().classes('w-full p-3 shadow-sm gap-1'):
                     with ui.row().classes('items-center gap-2 no-wrap w-full'):
                         ui.checkbox(
-                            on_change=update_chart
+                            on_change=render_all_charts
                         ).bind_value(selected_map, run['run_path']).props('dense')
                         ui.element('div').style(f'background-color: {run["color"]}').classes('w-3.5 h-3.5 shrink-0')
                         ui.label(title_text).classes('font-bold font-mono text-sm text-slate-900')
@@ -493,33 +548,51 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
             columns_select = ui.toggle(
                 options={1: '1 Col', 2: '2 Col', 3: '3 Col'},
                 value=1,
-                on_change=lambda: update_chart(),
+                on_change=lambda: render_all_charts(),
             ).props('spread no-caps toggle-color=dark toggle-text-color=white color=white text-color=slate-800 unelevated square').classes('w-full')
 
             font_select = ui.select(
                 options=['sans-serif', 'Times New Roman', 'Arial', 'Courier New'],
                 value='sans-serif',
                 label='Font Family',
-                on_change=lambda: update_chart(),
+                on_change=lambda: render_all_charts(),
             ).classes('w-full')
 
             ui.label('2D Chart Style').classes('text-xs text-slate-600')
             style_2d_toggle = ui.toggle(
                 options={'dots': 'Dots', 'lines': 'Lines'},
                 value='dots',
-                on_change=lambda: update_chart(),
+                on_change=lambda: render_all_charts(),
             ).props('spread no-caps toggle-color=dark toggle-text-color=white color=white text-color=slate-800 unelevated square').classes('w-full')
 
             ui.label('2D Aspect Ratio').classes('text-xs text-slate-600')
             aspect_2d_toggle = ui.toggle(
                 options={True: '1:1', False: 'Auto'},
                 value=True,
-                on_change=lambda: update_chart(),
+                on_change=lambda: render_all_charts(),
+            ).props('spread no-caps toggle-color=dark toggle-text-color=white color=white text-color=slate-800 unelevated square').classes('w-full')
+
+            ui.label('Live Refresh').classes('text-xs text-slate-600')
+            live_refresh_toggle = ui.toggle(
+                options={True: 'On', False: 'Off'},
+                value=True,
             ).props('spread no-caps toggle-color=dark toggle-text-color=white color=white text-color=slate-800 unelevated square').classes('w-full')
 
 
+        def on_poll_tick():
+            if not live_refresh_toggle.value:
+                return
+            selected_runs = [r for r in all_runs if selected_map.get(r['run_path'])]
+            if not selected_runs:
+                return
+            if data_manager.poll_changes(selected_runs):
+                update_charts_incremental()
+
+        ui.timer(2.0, on_poll_tick)
+
         with ui.page_scroller(position='bottom-right', x_offset=20, y_offset=20):
             ui.button('Scroll to Top')
+
 
 
 def run_dashboard(metrics_dir: str = "metrics", **kwargs):

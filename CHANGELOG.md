@@ -1,6 +1,11 @@
 # Changelog
 
-## [0.3.0] - 2026-08-05
+## [0.4.0] - 2026-08-07
+
+### Added
+- efficient auto chart refresh
+
+## [0.3.0] - 2026-08-06
 
 ### Added 
 - confusion matrix support
@@ -9,7 +14,7 @@
 - correction in README
 - correction in CHANGELOG
 
-## [0.2.0] - 2026-08-05
+## [0.2.0] - 2026-08-06
 
 ### Added
 - Added support for 2D spatial metric visualization via `log_2d()`.
