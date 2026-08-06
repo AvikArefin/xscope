@@ -24,3 +24,10 @@ To launch the dashboard, run:
 ```bash
 xscope
 ```
+
+## For development
+
+You can use 
+```bash
+uv run src/cli.py —reload
+```
