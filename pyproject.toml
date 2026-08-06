@@ -22,7 +22,7 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/avik-arefin/xscope"
+Repository = "https://github.com/AvikArefin/xscope"
 
 [project.scripts]
 xscope = "xscope.cli:main"
