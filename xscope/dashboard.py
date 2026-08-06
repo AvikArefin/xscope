@@ -427,11 +427,17 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                     padding-bottom: 0 !important;
                     font-size: 13px;
                 }
+                .q-checkbox__bg {
+                    border-radius: 0 !important;
+                }
+                .q-card {
+                    border-radius: 0 !important;
+                }
             </style>
         ''')
 
         # Title Bar
-        with ui.header(elevated=False).classes('bg-white text-slate-800 border-b border-slate-200 items-center justify-left h-12 px-4 py-0'):
+        with ui.header(elevated=False).classes('bg-transparent text-slate-800 items-center justify-left h-12 px-4 py-0'):
             ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat dense color=slate-700')
             ui.label('XSCOPE').classes('font-bold text-sm font-mono tracking-wider text-slate-900')
             ui.space()
@@ -526,11 +532,11 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                 commit = run.get('git_commit', 'unknown')
                 sub_text = f"{ts_fmt} • {commit}" if ts_fmt else str(commit)
 
-                with ui.card().classes('w-full p-3 shadow-sm gap-1'):
+                with ui.card().props('flat square').classes('w-full p-3 shadow-sm gap-1 border border-slate-200'):
                     with ui.row().classes('items-center gap-2 no-wrap w-full'):
                         ui.checkbox(
                             on_change=render_all_charts
-                        ).bind_value(selected_map, run['run_path']).props('dense')
+                        ).bind_value(selected_map, run['run_path']).props('dense color=dark')
                         ui.element('div').style(f'background-color: {run["color"]}').classes('w-3.5 h-3.5 shrink-0')
                         ui.label(title_text).classes('font-bold font-mono text-sm text-slate-900')
 
@@ -591,7 +597,7 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
         ui.timer(2.0, on_poll_tick)
 
         with ui.page_scroller(position='bottom-right', x_offset=20, y_offset=20):
-            ui.button('Scroll to Top')
+            ui.button('Scroll to Top').props('flat dense color=slate-700')
 
 
 
