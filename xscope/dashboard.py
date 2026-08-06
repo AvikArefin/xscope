@@ -191,6 +191,7 @@ def build_2d_chart_options(
     selected_runs: list[dict],  
     font_family: str = "sans-serif",
     equal_aspect: bool = True,
+    draw_type: str = "dots",
 ) -> list[dict]:
     """Formats 2D spatial points/lines (2d.jsonl) into ECharts plots grouped by key prefix."""
     if not selected_runs:
@@ -233,7 +234,7 @@ def build_2d_chart_options(
 
                 charts[chart_title]['series'].append({
                     'name': series_name,
-                    'type': 'line',
+                    'type': 'scatter' if draw_type == 'dots' else 'line',
                     'data': points,
                     'showSymbol': True,
                     'symbolSize': 6,
@@ -324,7 +325,12 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
             with charts_container:
                 for options in build_grouped_scalar_chart_options(selected_runs, font_family=font_select.value):
                     ui.echart(options, renderer='svg').classes('w-full h-[400px]')
-                for options in build_2d_chart_options(selected_runs, font_family=font_select.value, equal_aspect=aspect_2d_checkbox.value):
+                for options in build_2d_chart_options(
+                    selected_runs,
+                    font_family=font_select.value,
+                    equal_aspect=aspect_2d_toggle.value,
+                    draw_type=style_2d_toggle.value,
+                ):
                     ui.echart(options, renderer='svg').classes('w-full h-[400px]')
 
         def select_all():
@@ -388,11 +394,19 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                 on_change=lambda: update_chart(),
             ).classes('w-full')
 
-            aspect_2d_checkbox = ui.checkbox(
-                '1:1 Aspect Ratio (2D)',
+            ui.label('2D Chart Style').classes('text-xs text-slate-600')
+            style_2d_toggle = ui.toggle(
+                options={'dots': 'Dots', 'lines': 'Lines'},
+                value='dots',
+                on_change=lambda: update_chart(),
+            ).props('spread no-caps toggle-color=dark toggle-text-color=white color=white text-color=slate-800 unelevated square').classes('w-full')
+
+            ui.label('2D Aspect Ratio').classes('text-xs text-slate-600')
+            aspect_2d_toggle = ui.toggle(
+                options={True: '1:1', False: 'Auto'},
                 value=True,
                 on_change=lambda: update_chart(),
-            ).classes('w-full text-sm text-slate-800')
+            ).props('spread no-caps toggle-color=dark toggle-text-color=white color=white text-color=slate-800 unelevated square').classes('w-full')
 
 
         with ui.page_scroller(position='bottom-right', x_offset=20, y_offset=20):
