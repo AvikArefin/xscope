@@ -181,6 +181,106 @@ def build_grouped_scalar_chart_options(selected_runs: list[dict], all_runs: list
 
     return list(charts.values())
 
+def load_2d_records(run_path: str) -> list[dict]:
+    """Loads 2D spatial records from 2d.jsonl inside an experiment folder."""
+    path = os.path.join(run_path, "2d.jsonl")
+    records: list[dict] = []
+    if os.path.isfile(path):
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        records.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+    return records
+
+
+def build_2d_chart_options(selected_runs: list[dict], all_runs: list[dict], font_family: str = "sans-serif") -> list[dict]:
+    """Formats 2D spatial points/lines (2d.jsonl) into ECharts plots grouped by key prefix."""
+    if not selected_runs:
+        return []
+
+    is_multi_run = len(selected_runs) > 1
+    charts: dict[str, dict] = {}
+
+    for run in selected_runs:
+        records = load_2d_records(run['run_path'])
+        if not records:
+            continue
+
+        exp_name = run.get('experiment_name', '')
+        exp_num = run.get('experiment_number', '')
+        run_label = f"{exp_name} #{exp_num}" if exp_num != "" else str(exp_name)
+        base_color = run['color']
+
+        latest_record = records[-1]
+        unique_keys = sorted([k for k in latest_record.keys() if k not in ('epoch', 'step')])
+
+        chart_groups: dict[str, list[str]] = {}
+        for key in unique_keys:
+            chart_title = key.split('/')[0] if '/' in key else key
+            chart_groups.setdefault(chart_title, []).append(key)
+
+        for chart_title, keys_in_chart in chart_groups.items():
+            keys_in_chart = sorted(keys_in_chart)
+            num_lines = len(keys_in_chart)
+
+            if chart_title not in charts:
+                charts[chart_title] = {
+                    'textStyle': {'fontFamily': font_family},
+                    'title': {'text': f"2D: {chart_title.upper()}"},
+                    'tooltip': {'trigger': 'item'},
+                    'legend': {'top': '8%'},
+                    'toolbox': {
+                        'feature': {
+                            'saveAsImage': {
+                                'title': 'Save SVG',
+                                'type': 'svg',
+                                'backgroundColor': '#ffffff',
+                            }
+                        }
+                    },
+                    'xAxis': {
+                        'type': 'value',
+                        'scale': True,
+                        'nameTextStyle': {'color': '#000000'},
+                        'axisLabel': {'color': '#000000'},
+                    },
+                    'yAxis': {
+                        'type': 'value',
+                        'scale': True,
+                        'nameTextStyle': {'color': '#000000'},
+                        'axisLabel': {'color': '#000000'},
+                    },
+                    'series': [],
+                }
+
+            for line_idx, key in enumerate(keys_in_chart):
+                clean_name = key.split('/', 1)[1] if '/' in key else key
+                series_name = f"{run_label}: {clean_name}" if is_multi_run else clean_name
+
+                points = latest_record.get(key, [])
+                line_type, series_color = get_line_style(base_color, line_idx, num_lines)
+
+                charts[chart_title]['series'].append({
+                    'name': series_name,
+                    'type': 'line',
+                    'data': points,
+                    'showSymbol': True,
+                    'symbolSize': 6,
+                    'lineStyle': {
+                        'color': series_color,
+                        'type': line_type,
+                    },
+                    'itemStyle': {
+                        'color': series_color,
+                    },
+                })
+
+    return list(charts.values())
+
 
 def create_dashboard_page(metrics_dir: str = "metrics"):
     """Registers NiceGUI root page layout for metric visualization."""
@@ -221,6 +321,8 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
             charts_container.classes(replace=f'w-full p-4 grid gap-6 grid-cols-1 md:grid-cols-{cols}')
             with charts_container:
                 for options in build_grouped_scalar_chart_options(selected_runs, all_runs=all_runs, font_family=font_select.value):
+                    ui.echart(options, renderer='svg').classes('w-full h-[400px]')
+                for options in build_2d_chart_options(selected_runs, all_runs=all_runs, font_family=font_select.value):
                     ui.echart(options, renderer='svg').classes('w-full h-[400px]')
 
         def select_all():
