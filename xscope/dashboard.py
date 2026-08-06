@@ -170,7 +170,7 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
     @ui.page('/')
     def layout():
         all_runs = load_runs_metadata(metrics_dir)
-        selected_runs: list[dict] = []
+        selected_map: dict[str, bool] = {r['run_path']: False for r in all_runs}
 
         # Title Bar
         with ui.header(elevated=True).style('background-color: #3874c8').classes('items-center justify-left'):
@@ -183,6 +183,7 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
         charts_container = ui.element('div').classes('w-full p-4 grid gap-6 grid-cols-1')
 
         def update_chart():
+            selected_runs = [r for r in all_runs if selected_map.get(r['run_path'])]
             charts_container.clear()
             cols = columns_select.value
             charts_container.classes(replace=f'w-full p-4 grid gap-6 grid-cols-1 md:grid-cols-{cols}')
@@ -190,19 +191,14 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                 for options in build_grouped_scalar_chart_options(selected_runs, all_runs=all_runs, font_family=font_select.value):
                     ui.echart(options, renderer='svg').classes('w-full h-[400px]')
 
-        checkboxes: dict[str, ui.checkbox] = {}
-
         def select_all():
-            selected_runs.clear()
-            selected_runs.extend(all_runs)
-            for cb in checkboxes.values():
-                cb.value = True
+            for path in selected_map:
+                selected_map[path] = True
             update_chart()
 
         def clear_all():
-            selected_runs.clear()
-            for cb in checkboxes.values():
-                cb.value = False
+            for path in selected_map:
+                selected_map[path] = False
             update_chart()
 
         # Left Pane
@@ -226,25 +222,12 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
 
                 note_text = run.get('note') or 'Add a note...'
 
-                def make_handler(target_run):
-                    def handler(e):
-                        if e.value:
-                            if target_run not in selected_runs:
-                                selected_runs.append(target_run)
-                        else:
-                            if target_run in selected_runs:
-                                selected_runs.remove(target_run)
-                        update_chart()
-                    return handler
-
                 with ui.card().classes('w-full p-3 shadow-sm gap-1'):
                     with ui.row().classes('items-center gap-2 no-wrap w-full'):
-                        cb = ui.checkbox(
-                            value=(run in selected_runs),
-                            on_change=make_handler(run)
-                        ).props('dense')
-                        checkboxes[run['run_path']] = cb
-                        ui.element('div').style(f'background-color: {run['color']}').classes('w-3.5 h-3.5 shrink-0')
+                        ui.checkbox(
+                            on_change=update_chart
+                        ).bind_value(selected_map, run['run_path']).props('dense')
+                        ui.element('div').style(f'background-color: {run["color"]}').classes('w-3.5 h-3.5 shrink-0')
                         ui.label(title_text).classes('font-bold font-mono text-sm text-slate-900')
 
                     ui.label(sub_text).classes('font-mono text-xs text-slate-800 font-medium leading-none')
