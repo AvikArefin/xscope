@@ -197,7 +197,12 @@ def load_2d_records(run_path: str) -> list[dict]:
     return records
 
 
-def build_2d_chart_options(selected_runs: list[dict], all_runs: list[dict], font_family: str = "sans-serif") -> list[dict]:
+def build_2d_chart_options(
+    selected_runs: list[dict], 
+    all_runs: list[dict], 
+    font_family: str = "sans-serif",
+    equal_aspect: bool = True,
+) -> list[dict]:
     """Formats 2D spatial points/lines (2d.jsonl) into ECharts plots grouped by key prefix."""
     if not selected_runs:
         return []
@@ -279,6 +284,41 @@ def build_2d_chart_options(selected_runs: list[dict], all_runs: list[dict], font
                     },
                 })
 
+    if equal_aspect:
+        for chart in charts.values():
+            all_x = []
+            all_y = []
+            for s in chart['series']:
+                for pt in s.get('data', []):
+                    if len(pt) >= 2 and pt[0] is not None and pt[1] is not None:
+                        all_x.append(pt[0])
+                        all_y.append(pt[1])
+
+            if all_x and all_y:
+                min_x, max_x = min(all_x), max(all_x)
+                min_y, max_y = min(all_y), max(all_y)
+                max_span = max(max_x - min_x, max_y - min_y)
+                if max_span == 0:
+                    max_span = 2.0
+
+                margin = max_span * 0.05
+                max_span_padded = max_span + 2 * margin
+
+                mid_x = (min_x + max_x) / 2
+                mid_y = (min_y + max_y) / 2
+
+                chart['xAxis']['min'] = round(mid_x - max_span_padded / 2, 2)
+                chart['xAxis']['max'] = round(mid_x + max_span_padded / 2, 2)
+                chart['yAxis']['min'] = round(mid_y - max_span_padded / 2, 2)
+                chart['yAxis']['max'] = round(mid_y + max_span_padded / 2, 2)
+
+                chart['grid'] = {
+                    'left': 'center',
+                    'top': 70,
+                    'width': 280,
+                    'height': 280,
+                }
+
     return list(charts.values())
 
 
@@ -322,7 +362,7 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
             with charts_container:
                 for options in build_grouped_scalar_chart_options(selected_runs, all_runs=all_runs, font_family=font_select.value):
                     ui.echart(options, renderer='svg').classes('w-full h-[400px]')
-                for options in build_2d_chart_options(selected_runs, all_runs=all_runs, font_family=font_select.value):
+                for options in build_2d_chart_options(selected_runs, all_runs=all_runs, font_family=font_select.value, equal_aspect=aspect_2d_checkbox.value):
                     ui.echart(options, renderer='svg').classes('w-full h-[400px]')
 
         def select_all():
@@ -385,6 +425,12 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                 label='Font Family',
                 on_change=lambda: update_chart(),
             ).classes('w-full')
+
+            aspect_2d_checkbox = ui.checkbox(
+                '1:1 Aspect Ratio (2D)',
+                value=True,
+                on_change=lambda: update_chart(),
+            ).classes('w-full text-sm text-slate-800')
 
 
         with ui.page_scroller(position='bottom-right', x_offset=20, y_offset=20):
