@@ -1,6 +1,11 @@
 import os
 import json
+import logging
+import threading
+from collections import defaultdict
 from dataclasses import dataclass, field
+
+logger = logging.getLogger("xscope.data_manager")
 
 
 @dataclass
@@ -8,7 +13,18 @@ class FileState:
     offset: int = 0
     mtime: float = 0.0
     size: int = 0
+    ino: int = 0
     records: list[dict] = field(default_factory=list)
+    max_records: int = 5000  # Keep memory bounded for long runs
+
+    def add_record(self, record: dict):
+        self.records.append(record)
+        if len(self.records) > self.max_records:
+            # Downsample: keep every other old record, keep all recent records
+            half = self.max_records // 2
+            old = self.records[:-half]
+            keep = self.records[-half:]
+            self.records = old[::2] + keep
 
 
 class RunDataManager:
@@ -16,7 +32,8 @@ class RunDataManager:
 
     def __init__(self, metrics_dir: str = "metrics"):
         self.metrics_dir = metrics_dir
-        self.file_states: dict[tuple[str, str], FileState] = {}
+        self.file_states: dict[tuple[str, str], FileState] = defaultdict(FileState)
+        self.lock = threading.RLock()
 
     def load_runs_metadata(self) -> list[dict]:
         """Loads experiment run metadata from meta.json and note.txt files in metrics_dir."""
@@ -32,6 +49,7 @@ class RunDataManager:
                     try:
                         meta = json.load(f)
                     except json.JSONDecodeError:
+                        logger.warning("Failed to parse %s", meta_path)
                         continue
                 meta['run_path'] = folder_path
 
@@ -53,15 +71,12 @@ class RunDataManager:
         Zero disk read cost if file size and mtime haven't changed.
         Uses seek() to read only newly appended lines when file grows.
         """
-        key = (run_path, filename)
-        if key not in self.file_states:
-            self.file_states[key] = FileState()
-
-        state = self.file_states[key]
         filepath = os.path.join(run_path, filename)
+        state = self.file_states[(run_path, filename)] # Return defualt if no data exsits yet.
 
-        if not os.path.isfile(filepath):
-            if state.records:
+        # Handle missing data or deleted log files
+        if not os.path.isfile(filepath): # File NEVER existed
+            if state.records:            # File was loaded previously, but was just DELETED
                 state.records.clear()
                 state.offset = 0
                 state.size = 0
@@ -85,14 +100,29 @@ class RunDataManager:
 
         with open(filepath, "r", encoding="utf-8") as f:
             f.seek(state.offset)
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        state.records.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-            state.offset = f.tell()
+            last_good_pos = state.offset
+            
+            # FIX: Use readline() instead of `for line in f:`
+            # This allows f.tell() to work correctly without raising OSError.
+            while True:
+                line = f.readline()
+                if not line:
+                    break  # EOF
+                
+                stripped_line = line.strip()
+                if not stripped_line:
+                    last_good_pos = f.tell()
+                    continue
+
+                try:
+                    state.records.append(json.loads(stripped_line))
+                    last_good_pos = f.tell()
+                except json.JSONDecodeError:
+                    # Incomplete JSON line (likely mid-write). 
+                    # Break without updating last_good_pos so we retry next poll.
+                    break
+
+            state.offset = last_good_pos
 
         state.size = stat.st_size
         state.mtime = stat.st_mtime

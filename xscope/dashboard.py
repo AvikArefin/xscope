@@ -4,6 +4,7 @@ import colorsys
 
 from nicegui import app, ui
 from xscope.data_manager import RunDataManager
+from xscope.diagnostics import run_diagnostics_for_runs
 
 RUN_PALETTE = [
     '#2563eb',  # Blue
@@ -21,48 +22,15 @@ RUN_PALETTE = [
 LINE_STYLES = ['solid', 'dashed', 'dotted', 'dash-dot']
 
 
-def load_runs_metadata(dir: str = "metrics") -> list[dict]:
-    runs: list[dict] = []
-    if not os.path.exists(dir):
-        return runs
-
-    for folder in sorted(os.listdir(dir)):
-        folder_path = os.path.join(dir, folder)
-        meta_path = os.path.join(folder_path, "meta.json")
-        if os.path.isfile(meta_path):
-            with open(meta_path) as f:
-                meta = json.load(f)
-            meta['run_path'] = folder_path
-
-            note_path = os.path.join(folder_path, "note.txt")
-            if os.path.isfile(note_path):
-                with open(note_path, "r", encoding="utf-8") as f:
-                    meta['note'] = f.read()
-            else:
-                meta['note'] = ""
-
-            runs.append(meta)
-    for i, run in enumerate(runs): 
-        run['color'] = get_run_color(i)
-    return runs
+def get_run_label(run: dict) -> str:
+    name, num = run.get('experiment_name', ''), run.get('experiment_number', '')
+    return f"{name} #{num}" if num != "" else str(name)
 
 
 def load_records(run_path: str, filename: str, data_manager: RunDataManager | None = None) -> list[dict]:
-    """Loads metric records from metrics.jsonl inside an experiment folder."""
-    if data_manager is not None:
-        _, records = data_manager.get_records(run_path, filename)
-        return records
-    path = os.path.join(run_path, filename)
-    records: list[dict] = []
-    if os.path.isfile(path):
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        records.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
+    """Loads metric records from a jsonl file inside an experiment folder."""
+    dm = data_manager or RunDataManager()
+    _, records = dm.get_records(run_path, filename)
     return records
 
 def save_run_note(target_run: dict, new_note: str):
@@ -78,36 +46,60 @@ def save_run_note(target_run: dict, new_note: str):
 def get_run_color(run_index: int) -> str:
     return RUN_PALETTE[run_index % len(RUN_PALETTE)]
 
-def get_chart_base_config(font_family: str, chart_title: str, x_key = None, y_key = None, scale: bool = False):
+def get_chart_base_config(
+    font_family: str,
+    chart_title: str,
+    x_key = None,
+    y_key = None,
+    scale: bool = False,
+    renderer: str = "svg",
+    title_size: int = 18,
+    x_axis_size: int = 12,
+    y_axis_size: int = 12,
+    show_legend: bool = True,
+):
     return {
         'textStyle': {'fontFamily': font_family},
-        'title': {'text': chart_title.upper()},
+        'title': {
+            'text': chart_title,
+            'textStyle': {'color': '#000000', 'fontSize': title_size, 'fontWeight': 'normal'},
+        },
         'tooltip': {'trigger': 'axis'},
-        'legend': {'top': '8%'},
+        'legend': {'top': '8%', 'show': show_legend},
         'toolbox': {
             'feature': {
                 'saveAsImage': {
-                    'title': 'Save SVG',
-                    'type': 'svg',
+                    'title': 'Save SVG' if renderer == 'svg' else 'Save PNG',
+                    'type': 'svg' if renderer == 'svg' else 'png',
+                    'pixelRatio': 400 / 96,
                     'backgroundColor': '#ffffff',
                 }
             }
         },
+        'grid': {
+            'left': 48,
+            'right': 16,
+            'top': 65,
+            'bottom': 35,
+            'containLabel': True,
+        },
         'xAxis': {
             'type': 'value',
-            'name': x_key,
+            'name': x_key.capitalize() if isinstance(x_key, str) else x_key,
             'scale': scale,
             'nameLocation': 'middle',
-            'nameTextStyle': {'color': '#000000'},
-            'axisLabel': {'color': '#000000'},
+            'nameGap': 25,
+            'nameTextStyle': {'color': '#000000', 'fontSize': x_axis_size},
+            'axisLabel': {'color': '#000000', 'fontSize': x_axis_size},
         },
         'yAxis': {
             'type': 'value',
             'name': y_key,
             'scale': scale,
             'nameLocation': 'middle',
-            'nameTextStyle': {'color': '#000000'},
-            'axisLabel': {'color': '#000000'},
+            'nameGap': 35,
+            'nameTextStyle': {'color': '#000000', 'fontSize': y_axis_size},
+            'axisLabel': {'color': '#000000', 'fontSize': y_axis_size},
         },
         'series': [],
     }
@@ -123,10 +115,13 @@ def get_line_style(base_color: str, line_idx: int, num_lines: int) -> tuple[str,
         return line_type, base_color
 
     factor = 0.7 ** tier
-    r, g, b = (c / 255.0 for c in bytes.fromhex(base_color.lstrip('#')))
-    h, l, s = colorsys.rgb_to_hls(r, g, b)
-    r_new, g_new, b_new = colorsys.hls_to_rgb(h, max(0.15, min(0.85, l * factor)), s)
-    series_color = f"#{round(r_new * 255):02x}{round(g_new * 255):02x}{round(b_new * 255):02x}"
+    try:
+        r, g, b = (c / 255.0 for c in bytes.fromhex(base_color.lstrip('#')))
+        h, l, s = colorsys.rgb_to_hls(r, g, b)
+        r_new, g_new, b_new = colorsys.hls_to_rgb(h, max(0.15, min(0.85, l * factor)), s)
+        series_color = f"#{round(r_new * 255):02x}{round(g_new * 255):02x}{round(b_new * 255):02x}"
+    except Exception:
+        series_color = base_color
     return line_type, series_color
 
 
@@ -135,6 +130,12 @@ def build_grouped_scalar_chart_options(
     x_key: str = "epoch",
     font_family: str = "sans-serif",
     data_manager: RunDataManager | None = None,
+    renderer: str = "svg",
+    color_override: str | None = None,
+    title_size: int = 18,
+    x_axis_size: int = 12,
+    y_axis_size: int = 12,
+    show_legend: bool = True,
 ) -> list[dict]:
     """Formats time-series scalar metrics (metrics.jsonl) into ECharts line plots grouped by metric prefix."""
     if not selected_runs:
@@ -142,18 +143,18 @@ def build_grouped_scalar_chart_options(
 
     is_multi_run = len(selected_runs) > 1
     charts: dict[str, dict] = {}
+    ignored_keys = {x_key.lower(), 'epoch', 'step', 'timestamp', 'time', 'wall_time'}
 
     for run in selected_runs:
         records = load_records(run['run_path'], "metrics.jsonl", data_manager=data_manager)
         if not records:
             continue
 
-        exp_name = run.get('experiment_name', '')
-        exp_num = run.get('experiment_number', '')
-        run_label = f"{exp_name} #{exp_num}" if exp_num != "" else str(exp_name)
-        base_color = run['color']
+        run_label = get_run_label(run)
+        base_color = color_override or run['color']
 
-        unique_metric_keys = sorted({key for key in records[0].keys() if key != x_key})
+        all_keys = set().union(*(r.keys() for r in records))
+        unique_metric_keys = sorted({key for key in all_keys if key.lower() not in ignored_keys and not key.startswith('_')})
 
         chart_groups: dict[str, list[str]] = {}
         for key in unique_metric_keys:
@@ -165,14 +166,19 @@ def build_grouped_scalar_chart_options(
             num_lines = len(keys_in_chart)
 
             if chart_title not in charts:
-                charts[chart_title] = get_chart_base_config(font_family, chart_title, x_key, chart_title, False)
+                charts[chart_title] = get_chart_base_config(
+                    font_family, chart_title, x_key, chart_title, False,
+                    renderer=renderer, title_size=title_size,
+                    x_axis_size=x_axis_size, y_axis_size=y_axis_size,
+                    show_legend=show_legend,
+                )
 
             for line_idx, key in enumerate(keys_in_chart):
                 series_name = f"{run_label}: {key}" if is_multi_run else key
 
                 data_points = []
                 for i, r in enumerate(records):
-                    x_val = r.get(x_key, i + 1)
+                    x_val = r.get(x_key) or r.get(x_key.lower()) or r.get(x_key.capitalize()) or (i + 1)
                     y_val = r.get(key)
                     if y_val is not None:
                         data_points.append([x_val, y_val])
@@ -202,6 +208,12 @@ def build_2d_chart_options(
     equal_aspect: bool = True,
     draw_type: str = "dots",
     data_manager: RunDataManager | None = None,
+    renderer: str = "svg",
+    color_override: str | None = None,
+    title_size: int = 18,
+    x_axis_size: int = 12,
+    y_axis_size: int = 12,
+    show_legend: bool = True,
 ) -> list[dict]:
     """Formats 2D spatial points/lines (2d.jsonl) into ECharts plots grouped by key prefix."""
     if not selected_runs:
@@ -209,19 +221,18 @@ def build_2d_chart_options(
 
     is_multi_run = len(selected_runs) > 1
     charts: dict[str, dict] = {}
+    ignored_2d_keys = {'epoch', 'step', 'timestamp', 'time', 'wall_time'}
 
     for run in selected_runs:
         records = load_records(run['run_path'], "2d.jsonl", data_manager=data_manager)
         if not records:
             continue
 
-        exp_name = run.get('experiment_name', '')
-        exp_num = run.get('experiment_number', '')
-        run_label = f"{exp_name} #{exp_num}" if exp_num != "" else str(exp_name)
-        base_color = run['color']
+        run_label = get_run_label(run)
+        base_color = color_override or run['color']
 
         latest_record = records[-1]
-        unique_keys = sorted([k for k in latest_record.keys() if k not in ('epoch', 'step')])
+        unique_keys = sorted([k for k in latest_record.keys() if k.lower() not in ignored_2d_keys and not k.startswith('_')])
 
         chart_groups: dict[str, list[str]] = {}
         for key in unique_keys:
@@ -233,7 +244,12 @@ def build_2d_chart_options(
             num_lines = len(keys_in_chart)
 
             if chart_title not in charts:
-                charts[chart_title] = get_chart_base_config(font_family, chart_title, None, None, True)
+                charts[chart_title] = get_chart_base_config(
+                    font_family, chart_title, None, None, True,
+                    renderer=renderer, title_size=title_size,
+                    x_axis_size=x_axis_size, y_axis_size=y_axis_size,
+                    show_legend=show_legend,
+                )
 
             for line_idx, key in enumerate(keys_in_chart):
                 clean_name = key.split('/', 1)[1] if '/' in key else key
@@ -299,6 +315,10 @@ def build_matrix_chart_options(
     selected_runs: list[dict],
     font_family: str = "sans-serif",
     data_manager: RunDataManager | None = None,
+    renderer: str = "svg",
+    title_size: int = 18,
+    x_axis_size: int = 12,
+    y_axis_size: int = 12,
 ) -> list[dict]:
     """Formats matrix records (matrix.jsonl) into ECharts Heatmap plots."""
     if not selected_runs:
@@ -313,9 +333,7 @@ def build_matrix_chart_options(
         if not records:
             continue
 
-        exp_name = run.get('experiment_name', '')
-        exp_num = run.get('experiment_number', '')
-        run_label = f"{exp_name} #{exp_num}" if exp_num != "" else str(exp_name)
+        run_label = get_run_label(run)
 
         latest_record = records[-1]
         step = latest_record.get('step')
@@ -345,24 +363,36 @@ def build_matrix_chart_options(
 
         chart_config = {
             'textStyle': {'fontFamily': font_family},
-            'title': {'text': chart_title.upper()},
+            'title': {
+                'text': chart_title,
+                'textStyle': {'color': '#000000', 'fontSize': title_size, 'fontWeight': 'normal'},
+            },
             'tooltip': {'position': 'top'},
             'toolbox': {
                 'feature': {
                     'saveAsImage': {
-                        'title': 'Save SVG',
-                        'type': 'svg',
+                        'title': 'Save SVG' if renderer == 'svg' else 'Save PNG',
+                        'type': 'svg' if renderer == 'svg' else 'png',
+                        'pixelRatio': 400 / 96,
                         'backgroundColor': '#ffffff',
                     }
                 }
             },
-            'grid': {'height': '65%', 'top': '15%'},
+            'grid': {
+                'left': 48,
+                'right': 16,
+                'top': 65,
+                'bottom': 65,
+                'containLabel': True,
+            },
             'xAxis': {
                 'type': 'category',
                 'data': labels,
                 'name': 'Predicted',
                 'nameLocation': 'middle',
                 'nameGap': 25,
+                'nameTextStyle': {'fontSize': x_axis_size},
+                'axisLabel': {'fontSize': x_axis_size},
                 'splitArea': {'show': True},
             },
             'yAxis': {
@@ -371,6 +401,8 @@ def build_matrix_chart_options(
                 'name': 'True',
                 'nameLocation': 'middle',
                 'nameGap': 35,
+                'nameTextStyle': {'fontSize': y_axis_size},
+                'axisLabel': {'fontSize': y_axis_size},
                 'splitArea': {'show': True},
                 'inverse': True,
             },
@@ -441,33 +473,106 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
             ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat dense color=slate-700')
             ui.label('XSCOPE').classes('font-bold text-sm font-mono tracking-wider text-slate-900')
             ui.space()
+            ui.button(on_click=lambda: toggle_diagnostics(), icon='health_and_safety').props('flat dense color=slate-700').tooltip('Diagnostics')
             ui.button(on_click=lambda: right_drawer.toggle(), icon='settings').props('flat dense color=slate-700')
 
         # Main dynamic container for metric charts
         charts_container = ui.element('div').classes('w-full p-4 grid gap-6 grid-cols-1')
+
+        # Bottom Drawer for Diagnostics (Method 2: ui.footer)
+        with ui.footer(value=False).style('background-color: #f8fafc; max-height: 40vh; overflow-y: auto;').classes('border-t border-slate-300 p-0 text-slate-800 flex flex-col gap-0 shadow-lg') as bottom_drawer:
+            with ui.row().classes('w-full items-center gap-2 border-b border-slate-200 px-4 py-2'):
+                ui.icon('health_and_safety').classes('text-base text-slate-700')
+                ui.label('DIAGNOSTICS').classes('font-bold font-mono text-xs tracking-wider text-slate-900')
+                ui.space()
+                ui.button(on_click=lambda: bottom_drawer.toggle(), icon='close').props('flat dense color=slate-700')
+
+            diagnostics_container = ui.column().classes('w-full p-0 gap-0')
+
+        def refresh_diagnostics():
+            diagnostics_container.clear()
+            selected_runs = [r for r in all_runs if selected_map.get(r['run_path'])]
+            if not selected_runs:
+                with diagnostics_container:
+                    ui.label('No runs selected. Select runs in the left panel.').classes('font-mono text-xs text-slate-500 italic px-4 py-2')
+                return
+            results = run_diagnostics_for_runs(selected_runs, data_manager)
+            if not results:
+                with diagnostics_container:
+                    with ui.row().classes('w-full px-4 py-2.5 bg-emerald-50 text-emerald-800 items-center gap-2.5'):
+                        ui.icon('check_circle').classes('text-base shrink-0')
+                        ui.label('All diagnostics passed. No anomalies detected.').classes('font-mono text-xs font-semibold')
+                return
+
+            with diagnostics_container:
+                for res in results:
+                    if res.severity == 'critical':
+                        bg_cls = 'bg-red-50 text-red-800'
+                        icon_name = 'error'
+                    elif res.severity == 'warning':
+                        bg_cls = 'bg-amber-50 text-amber-800'
+                        icon_name = 'warning'
+                    else:
+                        bg_cls = 'bg-blue-50 text-blue-800'
+                        icon_name = 'info'
+
+                    with ui.row().classes(f'w-full px-4 py-2.5 items-start gap-2.5 {bg_cls}'):
+                        ui.icon(icon_name).classes('text-base shrink-0 mt-0.5')
+                        with ui.column().classes('gap-0 flex-1'):
+                            title_line = f"[{res.run_name}] {res.title}"
+                            if res.epoch is not None:
+                                title_line += f" (Epoch {res.epoch})"
+                            ui.label(title_line).classes('font-bold font-mono text-xs')
+                            ui.label(res.message).classes('font-mono text-xs font-medium')
+                            if res.suggested_action:
+                                ui.label(f"Suggestion: {res.suggested_action}").classes('font-mono text-xs font-medium')
+
+        def toggle_diagnostics():
+            bottom_drawer.toggle()
+            if bottom_drawer.value:
+                refresh_diagnostics()
+
+        def get_all_chart_options(selected_runs: list[dict]) -> list[dict]:
+            renderer_val = renderer_toggle.value
+            color_override_val = color_override_input.value or None
+            font_val = font_select.value
+            t_size = int(title_font_size.value or 18)
+            x_size = int(x_font_size.value or 12)
+            y_size = int(y_font_size.value or 12)
+            show_leg = legend_toggle.value
+            return [
+                *build_grouped_scalar_chart_options(
+                    selected_runs, font_family=font_val, data_manager=data_manager,
+                    renderer=renderer_val, color_override=color_override_val,
+                    title_size=t_size, x_axis_size=x_size, y_axis_size=y_size,
+                    show_legend=show_leg,
+                ),
+                *build_2d_chart_options(
+                    selected_runs, font_family=font_val, equal_aspect=aspect_2d_toggle.value,
+                    draw_type=style_2d_toggle.value, data_manager=data_manager,
+                    renderer=renderer_val, color_override=color_override_val,
+                    title_size=t_size, x_axis_size=x_size, y_axis_size=y_size,
+                    show_legend=show_leg,
+                ),
+                *build_matrix_chart_options(
+                    selected_runs, font_family=font_val, data_manager=data_manager,
+                    renderer=renderer_val,
+                    title_size=t_size, x_axis_size=x_size, y_axis_size=y_size,
+                ),
+            ]
 
         def render_all_charts():
             selected_runs = [r for r in all_runs if selected_map.get(r['run_path'])]
             charts_container.clear()
             active_echarts.clear()
 
+            renderer_val = renderer_toggle.value
             cols = columns_select.value
             charts_container.classes(replace=f'w-full p-4 grid gap-6 grid-cols-1 md:grid-cols-{cols}')
             with charts_container:
-                all_opts = []
-                all_opts.extend(build_grouped_scalar_chart_options(selected_runs, font_family=font_select.value, data_manager=data_manager))
-                all_opts.extend(build_2d_chart_options(
-                    selected_runs,
-                    font_family=font_select.value,
-                    equal_aspect=aspect_2d_toggle.value,
-                    draw_type=style_2d_toggle.value,
-                    data_manager=data_manager,
-                ))
-                all_opts.extend(build_matrix_chart_options(selected_runs, font_family=font_select.value, data_manager=data_manager))
-
-                for options in all_opts:
+                for options in get_all_chart_options(selected_runs):
                     chart_title = options.get('title', {}).get('text', '')
-                    widget = ui.echart(options, renderer='svg').classes('w-full h-[400px]')
+                    widget = ui.echart(options, renderer=renderer_val).classes('w-full h-[400px]')
                     if chart_title:
                         active_echarts[chart_title] = widget
 
@@ -476,17 +581,7 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
             if not selected_runs:
                 return
 
-            all_opts = []
-            all_opts.extend(build_grouped_scalar_chart_options(selected_runs, font_family=font_select.value, data_manager=data_manager))
-            all_opts.extend(build_2d_chart_options(
-                selected_runs,
-                font_family=font_select.value,
-                equal_aspect=aspect_2d_toggle.value,
-                draw_type=style_2d_toggle.value,
-                data_manager=data_manager,
-            ))
-            all_opts.extend(build_matrix_chart_options(selected_runs, font_family=font_select.value, data_manager=data_manager))
-
+            all_opts = get_all_chart_options(selected_runs)
             current_titles = {opt.get('title', {}).get('text', '') for opt in all_opts if opt.get('title', {}).get('text')}
             if current_titles != set(active_echarts.keys()):
                 render_all_charts()
@@ -520,9 +615,7 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                 ui.button('Clear All', icon='clear_all', on_click=clear_all).props('unelevated square no-caps color=white text-color=slate-800').classes('flex-1')
 
             for run_idx, run in enumerate(all_runs):
-                exp_name = run.get('experiment_name', '')
-                exp_num = run.get('experiment_number', '')
-                title_text = f"{exp_name} #{exp_num}" if exp_num != "" else str(exp_name)
+                title_text = get_run_label(run)
 
                 ts_raw = str(run.get('timestamp', ''))
                 if len(ts_raw) == 15 and '_' in ts_raw:
@@ -563,6 +656,35 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                 label='Font Family',
                 on_change=lambda: render_all_charts(),
             ).classes('w-full')
+
+            ui.label('Legend').classes('text-xs text-slate-600')
+            legend_toggle = ui.toggle(
+                options={True: 'Show', False: 'Hide'},
+                value=True,
+                on_change=lambda: render_all_charts(),
+            ).props('spread no-caps toggle-color=dark toggle-text-color=white color=white text-color=slate-800 unelevated square').classes('w-full')
+
+            ui.label('Font Sizes').classes('text-xs text-slate-600')
+            with ui.row().classes('w-full gap-2'):
+                title_font_size = ui.number(label='Title', value=18, min=8, max=60, step=1, on_change=lambda: render_all_charts()).props('dense outlined').classes('flex-1')
+                x_font_size = ui.number(label='X-Axis', value=12, min=6, max=40, step=1, on_change=lambda: render_all_charts()).props('dense outlined').classes('flex-1')
+                y_font_size = ui.number(label='Y-Axis', value=12, min=6, max=40, step=1, on_change=lambda: render_all_charts()).props('dense outlined').classes('flex-1')
+
+            ui.label('Rendering Mode').classes('text-xs text-slate-600')
+            renderer_toggle = ui.toggle(
+                options={'svg': 'SVG', 'canvas': 'Rasterizer'},
+                value='svg',
+                on_change=lambda: render_all_charts(),
+            ).props('spread no-caps toggle-color=dark toggle-text-color=white color=white text-color=slate-800 unelevated square').classes('w-full')
+
+            ui.label('Graph Color Override').classes('text-xs text-slate-600')
+            color_override_input = ui.color_input(
+                label='Base Color',
+                value='',
+                placeholder='Auto (per run)',
+                preview=True,
+                on_change=lambda: render_all_charts(),
+            ).props('clearable').classes('w-full')
 
             ui.label('2D Chart Style').classes('text-xs text-slate-600')
             style_2d_toggle = ui.toggle(
