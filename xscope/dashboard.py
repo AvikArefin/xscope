@@ -136,6 +136,7 @@ def build_grouped_scalar_chart_options(
     x_axis_size: int = 12,
     y_axis_size: int = 12,
     show_legend: bool = True,
+    scale: bool = False,
 ) -> list[dict]:
     """Formats time-series scalar metrics (metrics.jsonl) into ECharts line plots grouped by metric prefix."""
     if not selected_runs:
@@ -167,7 +168,7 @@ def build_grouped_scalar_chart_options(
 
             if chart_title not in charts:
                 charts[chart_title] = get_chart_base_config(
-                    font_family, chart_title, x_key, chart_title, False,
+                    font_family, chart_title, x_key, chart_title, scale,
                     renderer=renderer, title_size=title_size,
                     x_axis_size=x_axis_size, y_axis_size=y_axis_size,
                     show_legend=show_legend,
@@ -540,12 +541,13 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
             x_size = int(x_font_size.value or 12)
             y_size = int(y_font_size.value or 12)
             show_leg = legend_toggle.value
+            scale_val = y_scale_toggle.value
             return [
                 *build_grouped_scalar_chart_options(
                     selected_runs, font_family=font_val, data_manager=data_manager,
                     renderer=renderer_val, color_override=color_override_val,
                     title_size=t_size, x_axis_size=x_size, y_axis_size=y_size,
-                    show_legend=show_leg,
+                    show_legend=show_leg, scale=scale_val,
                 ),
                 *build_2d_chart_options(
                     selected_runs, font_family=font_val, equal_aspect=aspect_2d_toggle.value,
@@ -661,6 +663,13 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
             legend_toggle = ui.toggle(
                 options={True: 'Show', False: 'Hide'},
                 value=True,
+                on_change=lambda: render_all_charts(),
+            ).props('spread no-caps toggle-color=dark toggle-text-color=white color=white text-color=slate-800 unelevated square').classes('w-full')
+
+            ui.label('Y-Axis Scale').classes('text-xs text-slate-600')
+            y_scale_toggle = ui.toggle(
+                options={False: 'Zero', True: 'Focus'},
+                value=False,
                 on_change=lambda: render_all_charts(),
             ).props('spread no-caps toggle-color=dark toggle-text-color=white color=white text-color=slate-800 unelevated square').classes('w-full')
 
