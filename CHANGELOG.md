@@ -1,7 +1,21 @@
 # Changelog
 
-## [0.4.0] - 2026-08-07
+## [0.5.1] - 2026-09-16
 
+### Changed
+- Added Cortex Technologies presentation and studio attribution to the README.
+
+## [0.5.0] - 2026-09-16
+
+### Added
+- Added automated diagnostics for training anomalies and model performance issues.
+- Added Y-axis focus mode for chart inspection.
+
+### Fixed
+- Improved loss divergence, overfitting, underfitting, class confusion, and learning-rate diagnostics.
+- Fixed 2D prediction divergence calculations to account for both axes.
+
+## [0.4.0] - 2026-08-07
 ### Added
 - efficient auto chart refresh
 
