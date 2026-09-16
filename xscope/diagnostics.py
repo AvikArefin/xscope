@@ -111,6 +111,8 @@ def check_loss_divergence(run: dict, data_manager: RunDataManager) -> Optional[D
         if is_increasing and has_strict_increase:
             start_epoch = recent_5[0][0]
             end_epoch = recent_5[-1][0]
+            # NOTE: returning here intentionally takes priority over the overfitting
+            # gap check below — divergence is the stronger signal when both are present.
             return DiagnosticResult(
                 severity='warning',
                 title="Validation Loss Divergence",
@@ -120,7 +122,7 @@ def check_loss_divergence(run: dict, data_manager: RunDataManager) -> Optional[D
                 suggested_action="Consider early stopping or increasing regularization (dropout/weight decay).",
             )
 
-        # Check train/val gap (overfitting)
+        # Check train/val gap (overfitting): train falling while val is flat/rising.
         if len(train_losses) >= 5:
             train_recent = train_losses[-5:]
             val_recent = val_losses[-5:]
@@ -129,7 +131,8 @@ def check_loss_divergence(run: dict, data_manager: RunDataManager) -> Optional[D
             
             if train_decreasing and val_increasing_or_flat:
                 gap = val_recent[-1][1] - train_recent[-1][1]
-                if gap > 0.1 * abs(val_recent[-1][1]):
+                # Use max(0.05, ...) so near-zero val losses don't fire on noise.
+                if gap > max(0.05, 0.1 * abs(val_recent[-1][1])):
                     return DiagnosticResult(
                         severity='warning',
                         title="Overfitting Detected",
@@ -233,16 +236,21 @@ def check_class_collapse(run: dict, data_manager: RunDataManager) -> Optional[Di
                     max_off_diag = matrix[i][j]
                     max_pair = (i, j)
                     
-    if max_off_diag > 0.3 * total_samples and max_pair:
-        true_label = labels[max_pair[0]] if max_pair[0] < len(labels) else f"Class {max_pair[0]}"
-        pred_label = labels[max_pair[1]] if max_pair[1] < len(labels) else f"Class {max_pair[1]}"
-        return DiagnosticResult(
-            severity='info',
-            title="Systematic Class Confusion",
-            message=f"{round(max_off_diag/total_samples*100)}% of '{true_label}' misclassified as '{pred_label}'.",
-            run_name=run_name,
-            suggested_action="Inspect misclassified samples to understand feature overlap.",
-        )
+    # Use the true-class row sum as the denominator so this fires on imbalanced
+    # datasets too — a minority class being 50%+ confused with another class is
+    # just as significant even if it's only 5% of total_samples.
+    if max_pair:
+        true_row_sum = row_sums[max_pair[0]]
+        if true_row_sum > 0 and max_off_diag > 0.5 * true_row_sum:
+            true_label = labels[max_pair[0]] if max_pair[0] < len(labels) else f"Class {max_pair[0]}"
+            pred_label = labels[max_pair[1]] if max_pair[1] < len(labels) else f"Class {max_pair[1]}"
+            return DiagnosticResult(
+                severity='info',
+                title="Systematic Class Confusion",
+                message=f"{round(max_off_diag/true_row_sum*100)}% of '{true_label}' misclassified as '{pred_label}'.",
+                run_name=run_name,
+                suggested_action="Inspect misclassified samples to understand feature overlap.",
+            )
 
     return None
 
@@ -310,7 +318,7 @@ def check_training_stall(run: dict, data_manager: RunDataManager) -> Optional[Di
         return None
     
     recent = records[-10:]
-    acc_key = next((k for k in records[-1] if 'acc' in k.lower()), None)
+    acc_key = next((k for k in recent[-1] if 'acc' in k.lower()), None)
     
     if acc_key:
         accs = [r[acc_key] for r in recent if isinstance(r.get(acc_key), (int, float))]
@@ -338,7 +346,9 @@ def check_underfitting(run: dict, data_manager: RunDataManager) -> Optional[Diag
     if len(train_losses) >= 5:
         avg_loss = sum(train_losses) / len(train_losses)
         slope = (train_losses[-1] - train_losses[0]) / len(train_losses)
-        if avg_loss > 1.0 and abs(slope) < 0.001:
+        # No absolute floor on avg_loss — a flat loss at any level (e.g. 0.6) can
+        # indicate underfitting or a stuck optimiser and is worth surfacing.
+        if abs(slope) < 0.001:
             return DiagnosticResult(
                 severity='warning',
                 title='Possible Underfitting',
@@ -373,7 +383,8 @@ def check_data_leakage(run: dict, data_manager: RunDataManager) -> Optional[Diag
 def check_lr_too_high(run: dict, data_manager: RunDataManager) -> Optional[DiagnosticResult]:
     # TODO: Do we know if the get_records would always give us the records? need to check.
     _, records = data_manager.get_records(run.get('run_path', ''), "metrics.jsonl")
-    train_losses = [r['loss/train'] for r in records if 'loss/train' in r]
+    train_losses = [r['loss/train'] for r in records
+                   if isinstance(r.get('loss/train'), (int, float))]
     if len(train_losses) < 6:
         return None
     
@@ -405,8 +416,11 @@ def check_2d_prediction_divergence(run: dict, data_manager: RunDataManager) -> O
         true_pts = r.get('data/true', [])
         pred_pts = r.get('data/pred', [])
         if len(true_pts) == len(pred_pts) and len(true_pts) > 0:
+            # Include both X and Y axes in the squared error so spatial drift
+            # in either dimension is captured, not just the Y component.
             total_err = sum(
-                (t[1] - p[1])**2 for t, p in zip(true_pts, pred_pts)
+                (t[0] - p[0])**2 + (t[1] - p[1])**2
+                for t, p in zip(true_pts, pred_pts)
                 if isinstance(t, list) and isinstance(p, list) and len(t) >= 2 and len(p) >= 2
             )
             errors.append((r.get('epoch'), total_err / len(true_pts)))
