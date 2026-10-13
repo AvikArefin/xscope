@@ -1,10 +1,13 @@
 import os
+import html
 import json
 import colorsys
 
 from nicegui import app, ui
 from xscope.data_manager import RunDataManager
 from xscope.diagnostics import run_diagnostics_for_runs
+from xscope.diagnostics.core import run_label as get_run_label
+from xscope.diagnostics.series import is_number
 
 RUN_PALETTE = [
     '#2563eb',  # Blue
@@ -20,11 +23,6 @@ RUN_PALETTE = [
 ]
 
 LINE_STYLES = ['solid', 'dashed', 'dotted', 'dash-dot']
-
-
-def get_run_label(run: dict) -> str:
-    name, num = run.get('experiment_name', ''), run.get('experiment_number', '')
-    return f"{name} #{num}" if num != "" else str(name)
 
 
 def load_records(run_path: str, filename: str, data_manager: RunDataManager | None = None) -> list[dict]:
@@ -154,8 +152,9 @@ def build_grouped_scalar_chart_options(
         run_label = get_run_label(run)
         base_color = color_override or run['color']
 
-        all_keys = set().union(*(r.keys() for r in records))
-        unique_metric_keys = sorted({key for key in all_keys if key.lower() not in ignored_keys and not key.startswith('_')})
+        # Only numbers can be plotted; mtrick also accepts text values such as {"phase": "warmup"}
+        numeric_keys = {key for r in records for key, value in r.items() if is_number(value)}
+        unique_metric_keys = sorted({key for key in numeric_keys if key.lower() not in ignored_keys and not key.startswith('_')})
 
         chart_groups: dict[str, list[str]] = {}
         for key in unique_metric_keys:
@@ -179,9 +178,10 @@ def build_grouped_scalar_chart_options(
 
                 data_points = []
                 for i, r in enumerate(records):
-                    x_val = r.get(x_key) or r.get(x_key.lower()) or r.get(x_key.capitalize()) or (i + 1)
+                    # 'is None' rather than 'or': epoch 0 is a real x value
+                    x_val = next((r[k] for k in (x_key, x_key.lower(), x_key.capitalize()) if r.get(k) is not None), i + 1)
                     y_val = r.get(key)
-                    if y_val is not None:
+                    if is_number(y_val):
                         data_points.append([x_val, y_val])
 
                 line_type, series_color = get_line_style(base_color, line_idx, num_lines)
@@ -312,6 +312,16 @@ def build_2d_chart_options(
     return list(charts.values())
 
 
+MATRIX_LABEL_MAX_CHARS = 14   # longer class names are truncated with an ellipsis (full name in tooltip)
+MATRIX_CELL_LABEL_MAX_CLASSES = 15   # beyond this, counts are only shown in the tooltip
+MATRIX_ALL_TICKS_MAX_CLASSES = 40    # beyond this, ECharts thins out the axis labels
+
+
+def matrix_chart_size(num_classes: int) -> int:
+    """Max side length (px) of the square matrix chart; grows with the number of classes."""
+    return max(420, min(900, 260 + 22 * num_classes))
+
+
 def build_matrix_chart_options(
     selected_runs: list[dict],
     font_family: str = "sans-serif",
@@ -321,7 +331,11 @@ def build_matrix_chart_options(
     x_axis_size: int = 12,
     y_axis_size: int = 12,
 ) -> list[dict]:
-    """Formats matrix records (matrix.jsonl) into ECharts Heatmap plots."""
+    """Formats matrix records (matrix.jsonl) into square ECharts heatmaps.
+
+    The plot area is kept square: the chart container is rendered with a 1:1 aspect ratio
+    (see `_layout`), and the grid margins are balanced so that left + right == top + bottom.
+    """
     if not selected_runs:
         return []
 
@@ -341,34 +355,85 @@ def build_matrix_chart_options(
         labels = latest_record.get('labels', [])
         matrix = latest_record.get('matrix', [])
 
-        if not matrix:
+        if not matrix or not isinstance(matrix, list) or not all(isinstance(row, list) for row in matrix):
             continue
 
-        num_rows = len(matrix)
-        num_cols = len(matrix[0]) if num_rows > 0 else 0
-
-        if not labels:
-            labels = [f"Class {i}" for i in range(max(num_rows, num_cols))]
+        num_classes = max(len(matrix), max(len(row) for row in matrix))
+        if not isinstance(labels, list) or len(labels) != num_classes:
+            labels = [f"Class {i}" for i in range(num_classes)]
+        labels = [str(label) for label in labels]
 
         heatmap_data = []
         max_val = 0
-        for i in range(num_rows):
-            for j in range(len(matrix[i])):
-                val = matrix[i][j]
-                heatmap_data.append([j, i, val])
-                if val > max_val:
-                    max_val = val
+        for i, row in enumerate(matrix):
+            row_total = sum(v for v in row if isinstance(v, (int, float)))
+            for j, val in enumerate(row):
+                if not isinstance(val, (int, float)):
+                    continue
+                row_pct = round(100 * val / row_total, 1) if row_total else 0
+                heatmap_data.append([j, i, val, row_pct])
+                max_val = max(max_val, val)
 
         title_suffix = f" @ STEP {step}" if step is not None else ""
         chart_title = f"{run_label}: MATRIX{title_suffix}" if is_multi_run else f"MATRIX{title_suffix}"
 
+        # --- Layout: estimate label extents so the plot area can be made exactly square. ---
+        label_font = min(x_axis_size, y_axis_size)
+        if num_classes > MATRIX_CELL_LABEL_MAX_CLASSES:
+            label_font = max(8, min(label_font, int(label_font * 24 / num_classes) + 4))
+        longest = min(MATRIX_LABEL_MAX_CHARS, max((len(label) for label in labels), default=1))
+        label_px = int(longest * label_font * 0.62) + 8
+        rotate_x = num_classes > 8 or longest > 6
+        x_label_px = label_px if rotate_x else label_font + 8
+        axis_name_px = 28
+        visual_map_px = 72
+
+        left = axis_name_px + label_px
+        right = visual_map_px
+        top = title_size + 30
+        bottom = axis_name_px + x_label_px
+        # Balance margins so a square container yields a square plot area.
+        horizontal, vertical = left + right, top + bottom
+        if horizontal > vertical:
+            top += (horizontal - vertical) // 2
+            bottom += horizontal - vertical - (horizontal - vertical) // 2
+        else:
+            right += vertical - horizontal
+
+        show_cell_labels = num_classes <= MATRIX_CELL_LABEL_MAX_CLASSES
+        if show_cell_labels and max_val > 0:
+            # White text on dark cells, dark text on light cells.
+            heatmap_data = [
+                {'value': item, 'label': {'color': '#ffffff' if item[2] / max_val > 0.55 else '#0f172a'}}
+                for item in heatmap_data
+            ]
+        cell_font = 12 if num_classes <= 6 else 10 if num_classes <= 10 else 9
+        label_interval = 0 if num_classes <= MATRIX_ALL_TICKS_MAX_CLASSES else 'auto'
+        axis_label = {
+            'fontSize': label_font,
+            'interval': label_interval,
+            'width': label_px - 8,
+            'overflow': 'truncate',
+            'ellipsis': '…',
+        }
+        tooltip_labels = json.dumps([html.escape(label) for label in labels])
+
         chart_config = {
+            '_layout': {'square': True, 'max_size': matrix_chart_size(num_classes)},
+            '_key': f"matrix:{run['run_path']}",   # the title changes with every step, the chart stays the same one
             'textStyle': {'fontFamily': font_family},
             'title': {
                 'text': chart_title,
                 'textStyle': {'color': '#000000', 'fontSize': title_size, 'fontWeight': 'normal'},
             },
-            'tooltip': {'position': 'top'},
+            'tooltip': {
+                'position': 'top',
+                ':formatter': (
+                    f"(p) => {{ const L = {tooltip_labels}; const v = p.value; "
+                    "return 'True: <b>' + L[v[1]] + '</b><br>Predicted: <b>' + L[v[0]] + "
+                    "'</b><br>Count: ' + v[2] + ' (' + v[3] + '% of true class)'; }"
+                ),
+            },
             'toolbox': {
                 'feature': {
                     'saveAsImage': {
@@ -380,40 +445,42 @@ def build_matrix_chart_options(
                 }
             },
             'grid': {
-                'left': 48,
-                'right': 16,
-                'top': 65,
-                'bottom': 65,
-                'containLabel': True,
+                'left': left,
+                'right': right,
+                'top': top,
+                'bottom': bottom,
+                'containLabel': False,
             },
             'xAxis': {
                 'type': 'category',
                 'data': labels,
                 'name': 'Predicted',
                 'nameLocation': 'middle',
-                'nameGap': 25,
+                'nameGap': x_label_px + 8,
                 'nameTextStyle': {'fontSize': x_axis_size},
-                'axisLabel': {'fontSize': x_axis_size},
-                'splitArea': {'show': True},
+                'axisLabel': {**axis_label, 'rotate': 90 if rotate_x else 0},
+                'axisTick': {'show': False},
             },
             'yAxis': {
                 'type': 'category',
                 'data': labels,
                 'name': 'True',
                 'nameLocation': 'middle',
-                'nameGap': 35,
+                'nameGap': label_px + 8,
                 'nameTextStyle': {'fontSize': y_axis_size},
-                'axisLabel': {'fontSize': y_axis_size},
-                'splitArea': {'show': True},
+                'axisLabel': axis_label,
+                'axisTick': {'show': False},
                 'inverse': True,
             },
             'visualMap': {
                 'min': 0,
                 'max': max_val if max_val > 0 else 1,
+                'dimension': 2,
                 'calculable': True,
-                'orient': 'horizontal',
-                'left': 'center',
-                'bottom': '0%',
+                'orient': 'vertical',
+                'right': 8,
+                'top': 'middle',
+                'itemHeight': 140,
                 'inRange': {
                     'color': ['#f8fafc', '#93c5fd', '#1d4ed8']
                 }
@@ -422,7 +489,16 @@ def build_matrix_chart_options(
                 'name': 'Count',
                 'type': 'heatmap',
                 'data': heatmap_data,
-                'label': {'show': True},
+                'progressive': 0,  # draw every cell in one pass (large matrices otherwise render in chunks)
+                'label': {
+                    'show': show_cell_labels,
+                    'fontSize': cell_font,
+                    ':formatter': '(p) => String(p.value[2])',
+                },
+                'itemStyle': {
+                    'borderColor': '#ffffff',
+                    'borderWidth': 1 if num_classes <= MATRIX_ALL_TICKS_MAX_CLASSES else 0,
+                },
                 'emphasis': {
                     'itemStyle': {
                         'shadowBlur': 10,
@@ -434,6 +510,52 @@ def build_matrix_chart_options(
         charts.append(chart_config)
 
     return charts
+
+
+TEXT_TABLE_MAX_ROWS = 1000   # newest records kept per run; the table scrolls (see .xscope-text)
+
+
+def build_text_tables(selected_runs: list[dict], data_manager: RunDataManager | None = None) -> list[dict]:
+    """Formats logged text (text.jsonl) into one table per run: a row per record, newest first."""
+    is_multi_run = len(selected_runs) > 1
+    tables: list[dict] = []
+
+    for run in selected_runs:
+        records = load_records(run['run_path'], "text.jsonl", data_manager=data_manager)
+        if not records:
+            continue
+
+        first = max(0, len(records) - TEXT_TABLE_MAX_ROWS)
+        recent = records[first:][::-1]
+        x_key = next((k for k in ('epoch', 'step') if any(k in r for r in recent)), None)
+        text_keys = list(dict.fromkeys(
+            k for r in recent for k in r if k != x_key and not k.startswith('_')
+        ))
+
+        # Columns are numbered: the keys are free text and may hold any character
+        columns = [{'name': f'c{i}', 'label': key, 'field': f'c{i}', 'align': 'left'} for i, key in enumerate(text_keys)]
+        if x_key:
+            columns.insert(0, {'name': 'x', 'label': x_key.capitalize(), 'field': 'x', 'align': 'left'})
+        # 'id' is the record's position in the file, so a row keeps its id when newer rows arrive above it
+        rows = [
+            {'id': len(records) - 1 - row_idx, 'x': r.get(x_key, '') if x_key else '',
+             **{f'c{i}': str(r.get(key, '')) for i, key in enumerate(text_keys)}}
+            for row_idx, r in enumerate(recent)
+        ]
+
+        tables.append({
+            'key': run['run_path'],
+            'title': f"{get_run_label(run)}: TEXT" if is_multi_run else "TEXT",
+            'columns': columns,
+            'rows': rows,
+        })
+
+    return tables
+
+
+def chart_key(options: dict) -> str:
+    """What identifies a chart between refreshes: its '_key' if it has one, else its title."""
+    return options.get('_key') or options.get('title', {}).get('text', '')
 
 
 def create_dashboard_page(metrics_dir: str = "metrics"):
@@ -448,6 +570,8 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
 
         selected_map: dict[str, bool] = {r['run_path']: False for r in all_runs}
         active_echarts: dict[str, ui.echart] = {}
+        active_text_tables: dict[str, ui.table] = {}   # by run path
+        rendered_selection: list[str] = []   # run paths the charts were last drawn for
 
         ui.add_head_html('''
             <style>
@@ -466,6 +590,20 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                 .q-card {
                     border-radius: 0 !important;
                 }
+                /* Logged text: a few rows tall, scrolls inside itself, header stays in view */
+                .xscope-text {
+                    max-height: 320px;
+                }
+                .xscope-text td {
+                    white-space: pre-wrap;
+                    font-family: monospace;
+                }
+                .xscope-text thead tr th {
+                    position: sticky;
+                    top: 0;
+                    z-index: 1;
+                    background-color: #ffffff;
+                }
             </style>
         ''')
 
@@ -479,9 +617,12 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
 
         # Main dynamic container for metric charts
         charts_container = ui.element('div').classes('w-full p-4 grid gap-6 grid-cols-1')
+        # Logged text, one table per run, below the charts
+        text_container = ui.column().classes('w-full px-4 pb-4 gap-2')
 
         # Bottom Drawer for Diagnostics (Method 2: ui.footer)
-        with ui.footer(value=False).style('background-color: #f8fafc; max-height: 40vh; overflow-y: auto;').classes('border-t border-slate-300 p-0 text-slate-800 flex flex-col gap-0 shadow-lg') as bottom_drawer:
+        # Inline flex-direction: NiceGUI's .nicegui-footer rule (row) overrides the flex-col class.
+        with ui.footer(value=False).style('background-color: #f8fafc; max-height: 40vh; overflow-y: auto; overflow-x: hidden; flex-direction: column; flex-wrap: nowrap;').classes('border-t border-slate-300 p-0 text-slate-800 flex flex-col gap-0 shadow-lg') as bottom_drawer:
             with ui.row().classes('w-full items-center gap-2 border-b border-slate-200 px-4 py-2'):
                 ui.icon('health_and_safety').classes('text-base text-slate-700')
                 ui.label('DIAGNOSTICS').classes('font-bold font-mono text-xs tracking-wider text-slate-900')
@@ -517,16 +658,16 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                         bg_cls = 'bg-blue-50 text-blue-800'
                         icon_name = 'info'
 
-                    with ui.row().classes(f'w-full px-4 py-2.5 items-start gap-2.5 {bg_cls}'):
+                    with ui.row(wrap=False).classes(f'w-full px-4 py-2.5 items-start gap-2.5 {bg_cls}'):
                         ui.icon(icon_name).classes('text-base shrink-0 mt-0.5')
-                        with ui.column().classes('gap-0 flex-1'):
+                        with ui.column().classes('gap-0 flex-1 min-w-0'):
                             title_line = f"[{res.run_name}] {res.title}"
                             if res.epoch is not None:
-                                title_line += f" (Epoch {res.epoch})"
-                            ui.label(title_line).classes('font-bold font-mono text-xs')
-                            ui.label(res.message).classes('font-mono text-xs font-medium')
+                                title_line += f" (Step {res.epoch})" if res.metric == 'matrix' else f" (Epoch {res.epoch})"
+                            ui.label(title_line).classes('font-bold font-mono text-xs break-words w-full')
+                            ui.label(res.message).classes('font-mono text-xs font-medium break-words w-full')
                             if res.suggested_action:
-                                ui.label(f"Suggestion: {res.suggested_action}").classes('font-mono text-xs font-medium')
+                                ui.label(f"Suggestion: {res.suggested_action}").classes('font-mono text-xs font-medium break-words w-full')
 
         def toggle_diagnostics():
             bottom_drawer.toggle()
@@ -565,6 +706,7 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
 
         def render_all_charts():
             selected_runs = [r for r in all_runs if selected_map.get(r['run_path'])]
+            rendered_selection[:] = [r['run_path'] for r in selected_runs]
             charts_container.clear()
             active_echarts.clear()
 
@@ -573,10 +715,40 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
             charts_container.classes(replace=f'w-full p-4 grid gap-6 grid-cols-1 md:grid-cols-{cols}')
             with charts_container:
                 for options in get_all_chart_options(selected_runs):
-                    chart_title = options.get('title', {}).get('text', '')
-                    widget = ui.echart(options, renderer=renderer_val).classes('w-full h-[400px]')
-                    if chart_title:
-                        active_echarts[chart_title] = widget
+                    key = chart_key(options)
+                    options.pop('_key', None)
+                    layout = options.pop('_layout', None)
+                    widget = ui.echart(options, renderer=renderer_val)
+                    if layout and layout.get('square'):
+                        # Square container + balanced grid margins => square plot area at any width.
+                        widget.classes('w-full').style(
+                            f"height: auto; aspect-ratio: 1 / 1; max-width: {layout['max_size']}px; margin: 0 auto;"
+                        )
+                    else:
+                        widget.classes('w-full h-[400px]')
+                    if key:
+                        active_echarts[key] = widget
+            render_text_tables(selected_runs)
+
+        def render_text_tables(selected_runs: list[dict], rebuild: bool = True):
+            tables = build_text_tables(selected_runs, data_manager)
+
+            # Same tables as before: only the rows change, so a table being read keeps its scroll position
+            same_tables = [t['key'] for t in tables] == list(active_text_tables) and all(
+                active_text_tables[t['key']].columns == t['columns'] for t in tables)
+            if same_tables and not rebuild:
+                for table in tables:
+                    active_text_tables[table['key']].rows = table['rows']
+                return
+
+            text_container.clear()
+            active_text_tables.clear()
+            with text_container:
+                for table in tables:
+                    ui.label(table['title']).classes('text-lg text-black')
+                    active_text_tables[table['key']] = ui.table(
+                        columns=table['columns'], rows=table['rows'], row_key='id', pagination=0,
+                    ).props('dense flat square bordered virtual-scroll hide-bottom').classes('w-full xscope-text')
 
         def update_charts_incremental():
             selected_runs = [r for r in all_runs if selected_map.get(r['run_path'])]
@@ -584,21 +756,32 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                 return
 
             all_opts = get_all_chart_options(selected_runs)
-            current_titles = {opt.get('title', {}).get('text', '') for opt in all_opts if opt.get('title', {}).get('text')}
-            if current_titles != set(active_echarts.keys()):
+            if {chart_key(opt) for opt in all_opts} - {''} != set(active_echarts.keys()):
                 render_all_charts()
                 return
 
             for options in all_opts:
-                title = options.get('title', {}).get('text', '')
-                if title in active_echarts:
-                    widget = active_echarts[title]
+                widget = active_echarts.get(chart_key(options))
+                if widget is None:
+                    continue
+                if options.pop('_key', None):
+                    # A matrix: its title, colour range and labels all follow the newest record
+                    options.pop('_layout', None)
+                    widget.options.clear()
+                    widget.options.update(options)
+                else:
                     widget.options['series'] = options['series']
                     if 'xAxis' in options and 'min' in options['xAxis']:
                         widget.options['xAxis'] = options['xAxis']
                     if 'yAxis' in options and 'min' in options['yAxis']:
                         widget.options['yAxis'] = options['yAxis']
-                    widget.update()
+                widget.update()
+            render_text_tables(selected_runs, rebuild=False)
+
+        def on_selection_change():
+            """A checkbox changed. After Select All / Clear All every checkbox reports in, with nothing new to draw."""
+            if [r['run_path'] for r in all_runs if selected_map.get(r['run_path'])] != rendered_selection:
+                render_all_charts()
 
         def select_all():
             for path in selected_map:
@@ -616,7 +799,15 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                 ui.button('Select All', icon='select_all', on_click=select_all).props('unelevated square no-caps color=white text-color=slate-800').classes('flex-1')
                 ui.button('Clear All', icon='clear_all', on_click=clear_all).props('unelevated square no-caps color=white text-color=slate-800').classes('flex-1')
 
-            for run_idx, run in enumerate(all_runs):
+            # Runs of one group (e.g. a model version) share a folder prefix, so they are already next to each other
+            has_groups = any(run.get('group') for run in all_runs)
+            shown_group = None
+            for run in all_runs:
+                group = run.get('group') or 'ungrouped'
+                if has_groups and group != shown_group:
+                    shown_group = group
+                    ui.label(group).classes('font-bold font-mono text-xs tracking-wider text-slate-600 mt-1')
+
                 title_text = get_run_label(run)
 
                 ts_raw = str(run.get('timestamp', ''))
@@ -630,7 +821,7 @@ def create_dashboard_page(metrics_dir: str = "metrics"):
                 with ui.card().props('flat square').classes('w-full p-3 shadow-sm gap-1 border border-slate-200'):
                     with ui.row().classes('items-center gap-2 no-wrap w-full'):
                         ui.checkbox(
-                            on_change=render_all_charts
+                            on_change=on_selection_change
                         ).bind_value(selected_map, run['run_path']).props('dense color=dark')
                         ui.element('div').style(f'background-color: {run["color"]}').classes('w-3.5 h-3.5 shrink-0')
                         ui.label(title_text).classes('font-bold font-mono text-sm text-slate-900')

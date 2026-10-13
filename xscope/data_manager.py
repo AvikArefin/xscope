@@ -15,16 +15,6 @@ class FileState:
     size: int = 0
     ino: int = 0
     records: list[dict] = field(default_factory=list)
-    max_records: int = 5000  # Keep memory bounded for long runs
-
-    def add_record(self, record: dict):
-        self.records.append(record)
-        if len(self.records) > self.max_records:
-            # Downsample: keep every other old record, keep all recent records
-            half = self.max_records // 2
-            old = self.records[:-half]
-            keep = self.records[-half:]
-            self.records = old[::2] + keep
 
 
 class RunDataManager:
@@ -51,6 +41,9 @@ class RunDataManager:
                     except json.JSONDecodeError:
                         logger.warning("Failed to parse %s", meta_path)
                         continue
+                if not isinstance(meta, dict):
+                    logger.warning("Expected an object in %s", meta_path)
+                    continue
                 meta['run_path'] = folder_path
 
                 note_path = os.path.join(folder_path, "note.txt")
@@ -118,6 +111,11 @@ class RunDataManager:
                     state.records.append(json.loads(stripped_line))
                     last_good_pos = f.tell()
                 except json.JSONDecodeError:
+                    if line.endswith("\n"):
+                        # A finished line that isn't JSON: skip it, or nothing after it would ever load.
+                        logger.warning("Skipping a corrupt line in %s", filepath)
+                        last_good_pos = f.tell()
+                        continue
                     # Incomplete JSON line (likely mid-write). 
                     # Break without updating last_good_pos so we retry next poll.
                     break
@@ -134,7 +132,7 @@ class RunDataManager:
         Returns True if at least one file had new data appended, False otherwise.
         """
         has_any_change = False
-        target_files = ["metrics.jsonl", "2d.jsonl", "matrix.jsonl"]
+        target_files = ["metrics.jsonl", "2d.jsonl", "matrix.jsonl", "text.jsonl"]
 
         for run in selected_runs:
             run_path = run.get('run_path', '')
