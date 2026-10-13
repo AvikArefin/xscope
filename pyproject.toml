@@ -1,6 +1,6 @@
 [project]
 name = "xscope"
-version = "0.5.1"
+version = "0.6.0"
 description = "A local, zero-config ML experiment visualization dashboard"
 readme = "README.md"
 authors = [
@@ -30,3 +30,8 @@ xscope = "xscope.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
